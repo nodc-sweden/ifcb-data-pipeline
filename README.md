@@ -32,12 +32,23 @@ This repository contains the SMHI IFCB Data Pipeline, an R-based tool for proces
    # install.packages("devtools")
    devtools::install_github("EuropeanIFCBGroup/iRfcb", dependencies = TRUE)
    ```
-3. **Install Python**:  
+   
+3. **Edit environmental variables**:  
+   Set your paths as .Renviron project variables:
+   ```r
+   # Copy template
+   file.copy(".Renviron-template", ".Renviron")
+   
+   # Edit file
+   usethis::edit_r_environ("project")
+   ```
+
+4. **Install Python**:  
    The pipeline uses Python for some data processing tasks using `reticulate`. To set up Python:
    - Install Python (version > 3.10 is recommended)
    - A virtual environment is created in the pipeline using `iRfcb::py_install()`
 
-4. **Define parameters**:  
+5. **Define parameters**:  
    Update the parameters inside the `ifcb-data-pipeline.Rmd` file to suit your data processing needs, including:
    - Year to process
    - Classifier thresholds
