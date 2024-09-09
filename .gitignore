@@ -1,3 +1,6 @@
+# Virtuale environments
+.virtualenvs
+
 # History files
 .Rhistory
 .Rapp.history
@@ -47,3 +50,9 @@ po/*~
 
 # RStudio Connect folder
 rsconnect/
+
+# Shapefiles
+data/shapefiles/*/
+
+# Output
+output/html_reports/*.html
