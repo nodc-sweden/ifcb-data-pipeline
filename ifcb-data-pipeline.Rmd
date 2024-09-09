@@ -1,0 +1,1358 @@
+---
+author: "Anders Torstensson"
+date: "`r Sys.Date()`"
+params: 
+  classifier: "Baltic" # "Baltic", "Skagerrak-Kattegat" or "Tångesund"
+  year: [2022, 2023, 2024] # each year separated by comma, e.g. [2022, 2023, 2024]
+  threshold: "opt" # MATLAB classifier threshold, "opt", "adhoc" or "none"
+  remove_flagged_data: !r c("bubbles", "incomplete", "near land") # What flags should be used for filtering data e.g. c("bubbles", "incomplete", "near land")
+  regional: TRUE # If output should only contain data from the classifier region, e.g. Baltic data for the Baltic classifier
+  multiyear_delivery: TRUE # Include all years in a single data delivery, or split by year
+  f1_threshold: 0.9 # Remove classes below threshold this, not currently used
+ 
+output: html_document
+knit: (function(inputFile, encoding) {
+                        rmarkdown::render(inputFile,
+                        encoding=encoding, 
+                        output_file=paste0("output/html_reports/ifcb_data_export_report_",
+                        format(Sys.time(), "D%Y%m%dT%H%M"),
+                        ".html")) })
+title: "`r paste('ifcb-pipeline:', params$classifier, 'classifier')`"
+---
+
+# Introduction
+
+This document summarizes the data export process from the Imaging FlowCytobot (IFCB) to [SHARK](https://sharkweb.smhi.se/). IFCB images has been classified using an random forest algorithm using the MATLAB package [`ifcb-analysis`](https://github.com/hsosik/ifcb-analysis) (Sosik and Olson 2007). The data pipeline involves several key steps: environment setup, file path definition, IFCB data reading and processing, biovolume calculation, quality control, and data export in the standardized format required by SHARK. This process is facilitated by the R package [`iRfcb`](https://github.com/EuropeanIFCBGroup/iRfcb) (Torstensson 2024). 
+ 
+Parameters are defined to specify the classifier, year, classifier threshold, data removal flags, and data delivery options. The data are processed annually, but the script can generate either yearly data deliveries or a combined delivery spanning multiple years.
+
+## Setup
+
+In the setup section, we define essential options and load the required libraries to ensure the environment is correctly configured for the subsequent data processing steps. The [`svepa_event`](https://github.com/nodc-sweden/svepa_event) tool is used to gather information from the event system SVEPA used onboard R/V Svea. Additionally, we configure the necessary paths and virtual environments. If a detailed coastline shapefile does not already exist, one is downloaded from [EEA](https://www.eea.europa.eu/ds_resolveuid/3e10d9c027734ae2ae5f95309a78c259).
+
+```{r setup, include=FALSE}
+# Setting options for 'knitr' package chunks to display code in the output
+knitr::opts_chunk$set(echo = TRUE)
+
+# Start time
+knit.time <- Sys.time()
+
+# Load required libraries
+library(iRfcb)
+library(tidyverse)
+library(worrms)
+library(leaflet)
+library(htmltools)
+library(knitr)
+library(patchwork)
+library(reticulate)
+
+# Installing the required Python dependencies in a specified virtual environment for the 'iRfcb' package
+ifcb_py_install(envname = ".virtualenvs/iRfcb")
+
+# Install svepa_event from Github to access Svea cruise numbers
+py_install("git+https://github.com/nodc-sweden/svepa_event.git", pip = TRUE)
+
+# Import the svepa_event Python module
+svepa_event <- import("svepa_event")
+
+# Make sure SVEPA is up to date
+svepa_event$update_local_svepa_data()
+
+# Wrap svepa_event to catch errors
+py_run_string("
+def safe_get_svepa_event(svepa_event, platform, timestamp):
+    try:
+        result = svepa_event.get_svepa_event(platform, timestamp)
+        return {'id': result.id if hasattr(result, 'id') else None, 'error': None}
+    except AttributeError as e:
+        return {'id': None, 'error': str(e)}
+    except Exception as e:
+        return {'id': None, 'error': str(e)}
+")
+
+# Define paths from .Renviron, perhaps not necessary
+tlc_path <- Sys.getenv("tlc_path")
+tk_path <- Sys.getenv("tk_path")
+
+# Set TCL and TK PATH for knit, perhaps not necessary
+Sys.setenv(TCL_LIBRARY = tlc_path)
+Sys.setenv(TK_LIBRARY = tk_path)
+
+# Define the URL of a EEA shapefile and the target directory
+url <- "https://www.eea.europa.eu/data-and-maps/data/eea-coastline-for-analysis-2/gis-data/eea-coastline-polygon/at_download/file"
+zip_file <- "data/shapefiles/EEA_Coastline_Polygon_Shape.zip"
+extracted_dir <- "data/shapefiles/EEA_Coastline_Polygon_Shape"
+shapefile_path <- file.path(extracted_dir, "EEA_Coastline_20170228.shp")
+
+# Check if the shapefile already exists
+if (!file.exists(shapefile_path)) {
+  
+  # Create the target directory if it doesn't exist
+  if (!dir.exists(extracted_dir)) {
+    dir.create(extracted_dir, recursive = TRUE)
+  }
+  
+  # Download the ZIP file
+  download.file(url, zip_file, mode = "wb")
+  
+  # Extract the ZIP file
+  unzip(zip_file, exdir = extracted_dir)
+  
+  # Optionally, remove the downloaded ZIP file after extraction
+  file.remove(zip_file)
+  
+  message("File downloaded and extracted.")
+} else {
+  message("Shapefile already exists. No download needed.")
+}
+```
+
+## Data Export Paths
+
+Here, we define the file paths needed for exporting IFCB data. These paths include directories for storing features, HDR data, and MATLAB classified data for each specified year. The code also identifies the correct subfolders for classified data based on version numbers.
+
+```{r define_paths}
+# Get data paths to ifcb and ferrybox data folders defined in the projects .Renviron
+# Edit the .Renviron by usethis::edit_r_environ("project")
+ifcb_path <- Sys.getenv("ifcb_path")
+ferrybox_path <- Sys.getenv("ferrybox_path")
+
+# Define path to class2use file
+class2use_file <- file.path(ifcb_path, "config", paste0("class2use_", params$classifier, ".mat"))
+
+# Define path to manual folder
+manual_folder <- file.path(ifcb_path, "manual", params$classifier)
+
+# Initialize list to store paths for each year
+feature_folders <- list()
+data_folders <- list()
+class_folders <- list()
+max_versions <- list()
+
+# Loop through each year in params$year
+for (year in params$year) {
+  
+  # Define paths for feature and HDR data
+  feature_folder <- file.path(ifcb_path, "features", year)
+  data_folder <- file.path(ifcb_path, "data", year)
+
+  # Append to lists
+  feature_folders <- c(feature_folders, feature_folder)
+  data_folders <- c(data_folders, data_folder)
+
+  # Define path for the generic class folder
+  class_folder_generic <- file.path(ifcb_path, "classified", params$classifier)
+
+  # List all class versions
+  class_subfolders <- list.dirs(class_folder_generic, full.names = TRUE, recursive = FALSE)
+
+  # Find all subfolders from the selected year
+  class_subfolders <- class_subfolders[grepl(as.character(year), class_subfolders)]
+
+  # Extract the version numbers from the subfolder names
+  versions <- sub(paste0("class", year ,"_v"), "", basename(class_subfolders))
+  versions <- as.numeric(versions)
+
+  # Get the subfolder with the highest version number
+  max_version <- max(versions, na.rm = TRUE)
+  class_folder <- class_subfolders[which(versions == max_version)]
+
+  # Append to list
+  class_folders <- c(class_folders, class_folder)
+  max_versions <- c(max_versions, max_version)
+}
+
+# Define results folders
+output_folder <- file.path(ifcb_path, "shark")
+```
+
+## Reading HDR Data
+
+In this step, we read the HDR data files for each year specified in the parameters. The HDR data includes sample metadata such as GPS coordinates, timestamps, and related information. We handle any missing GPS data by filling in the gaps using ferrybox positions.
+
+```{r read_hdr_data}
+# Initialize a list to store the processed HDR data for each year
+hdr_data_list <- list()
+all_hdr_data_list <- list()
+ferrbyox_data_list <- list()
+
+# Start time
+start.time <- Sys.time()
+
+for (i in seq_along(params$year)) {
+
+  # Get current data folder
+  data_folder <- data_folders[[i]]
+
+  # Read HDR data from the specified data folder
+  all_hdr_data <- ifcb_read_hdr_data(data_folder, gps_only = FALSE, verbose = FALSE)
+
+  if (params$classifier == "Tångesund") {
+    
+    # Keep only relevant information and add position to Tångesund
+    hdr_data <- all_hdr_data %>%
+      select(sample, timestamp, date, year, month, day, time, ifcb_number) %>%
+      mutate(gpsLatitude = 58.07500,
+             gpsLongitude = 11.49300)
+  } else {
+   
+    # Keep only relevant information
+    hdr_data <- all_hdr_data %>%
+      select(sample, gpsLatitude, gpsLongitude, timestamp, date, year, month, day, time, ifcb_number)
+  }
+
+  # Identify rows in hdr_data where the year is not 2016 and GPS latitude or longitude is missing
+  missing_position <- hdr_data %>%
+    filter(is.na(gpsLatitude)) %>%
+    filter(is.na(gpsLongitude))
+
+  # If there are rows with missing GPS positions
+  if (nrow(missing_position) > 0) {
+    
+    # Retrieve ferrybox positions for the timestamps of the missing GPS data
+    ferrybox_positions <- ifcb_get_ferrybox_data(missing_position$timestamp, ferrybox_path)
+    
+    # Rename GPS latitude and longitude columns in ferrybox_positions to avoid conflicts
+    ferrybox_positions <- ferrybox_positions %>%
+      rename(gpsLatitude_fb = gpsLatitude,
+             gpsLongitude_fb = gpsLongitude)
+
+    # Merge hdr_data with ferrybox_positions based on timestamps
+    hdr_data <- hdr_data %>%
+      left_join(ferrybox_positions, by = "timestamp") %>%
+      mutate(gpsLatitude = coalesce(gpsLatitude, gpsLatitude_fb),
+             gpsLongitude = coalesce(gpsLongitude, gpsLongitude_fb)) %>%
+      select(-gpsLongitude_fb, -gpsLatitude_fb)
+  }
+  
+  # Define ferrybox parameter numbers to be extracted
+  ferrybox_parameters <- c("70", "80070", "8063", "88063", "8165", "88165",
+                           "8173", "88173", "8166","88166", "8172", "88172", "8174",
+                           "88174", "8177", "88177", "8179", "88179",
+                           "8181", "88181", "8190", "88190", "8191", "88191")
+  
+  if(!params$classifier == "Tångesund") {
+    
+    # Get ferrybox data for Svea data
+    ferrybox_data <- ifcb_get_ferrybox_data(hdr_data$timestamp, 
+                                            ferrybox_path, 
+                                            parameters = ferrybox_parameters)
+  } else {
+    
+    column_names <- c("timestamp", ferrybox_parameters)
+    
+    # Create a data frame with one row filled with NA values for Tångesund data
+    ferrybox_data <- data.frame(matrix(NA, ncol = length(column_names), nrow = 1))
+    colnames(ferrybox_data) <- column_names
+  }
+  
+  # Store the processed hdr_data in the list
+  hdr_data_list[[as.character(params$year[i])]] <- hdr_data
+  
+  # Store all the processed hdr_data in the list
+  all_hdr_data_list[[as.character(params$year[i])]] <- all_hdr_data
+  
+  # Store all the ferrybox data in the list
+  ferrbyox_data_list[[as.character(params$year[i])]] <- ferrybox_data
+}
+
+# End time
+end.time <- Sys.time()
+runtime_hdr <- round(end.time - start.time, 2)
+```
+
+## Get RV SVEA cruise number from SVEPA
+Here sample time stamps are matched with SVEPA using the [`svepa_event`](https://github.com/nodc-sweden/svepa_event) tool to extract cruise numbers for R/V Svea data.
+
+```{r get_svepa, include=TRUE, results = 'hide', echo=TRUE, warning=FALSE}
+# Start time
+start.time <- Sys.time()
+
+# Initialize a list to store the processed HDR data for each year
+svepa_list <- list()
+
+for (i in seq_along(params$year)) {
+  
+  if (params$classifier == "Tångesund") {
+    
+    # Create an empty vector
+    cruise_numbers <- data.frame(sample = as.character(), cruise_number = as.character())
+    
+  } else {
+    
+    # Get current HDR data
+    hdr_data <- hdr_data_list[[as.character(params$year[i])]]
+
+    # Create an empty vector
+    cruise_numbers <- data.frame(sample = as.character(), cruise_number = as.character())
+    
+    for (sample in seq_along(hdr_data$sample)) {
+      timestamp <- format(hdr_data$timestamp[sample], "%Y%m%d%H%M%S")
+      
+      # Call the Python function
+      svepa_result <- py$safe_get_svepa_event(svepa_event, "SVEA", timestamp)
+      
+      if (is.null(svepa_result$id)) {
+        svepa_id <- NA
+      } else {
+        svepa_id <- svepa_result$id
+      }
+      
+      cruise_number <- data.frame(sample = sapply(strsplit(hdr_data$sample[sample], "_"), `[`, 1),
+                                  cruise_number = svepa_id)
+      
+      # Add to cruise_numbers df
+      cruise_numbers <- bind_rows(cruise_numbers, cruise_number)
+    }
+  }
+  
+  # Store the analysis date in the list
+  svepa_list[[as.character(params$year[i])]] <- cruise_numbers 
+}
+
+# End time
+end.time <- Sys.time()
+runtime_svepa <- round(end.time - start.time, 2)
+```
+
+
+## Get Tångesund sample depth
+Sample depth information from the Tångesund study is read from a .csv file.
+
+```{r get_sample_depth, echo=TRUE}
+sample_depth <- read_csv("data/tangesund_depthdata.csv", col_types = cols()) %>%
+  distinct()
+```
+
+## Calculating Biovolumes
+This section involves summarizing the biovolume data for each year. The biovolume calculation uses the specified classifier and threshold to estimate the biomass of various phytoplankton classes within the samples.
+
+```{r get_biovolumes, include=TRUE, results = 'hide', echo=TRUE, warning=FALSE}
+# Start time
+start.time <- Sys.time()
+
+# Initialize a list to store the processed biovolume data and analysis date for each year
+biovolume_data_list <- list()
+analysis_date_list <- list()
+
+for (i in seq_along(params$year)) {
+  
+  cat("# Year:", params$year[i], "\n")
+
+  # Get current folders
+  data_folder <- data_folders[[i]]
+  class_folder <- class_folders[[i]]
+  feature_folder <- feature_folders[[i]]
+
+  # Summarize biovolume data using IFCB data from the specified folders
+  biovolume_data <- ifcb_summarize_biovolumes(
+    feature_folder,
+    class_folder,
+    hdr_folder = data_folder,
+    micron_factor = 1/3.4,
+    diatom_class = "Bacillariophyceae",
+    threshold = params$threshold
+  )
+
+  # Store the summarized biovolume data in the list
+  biovolume_data_list[[as.character(params$year[i])]] <- biovolume_data
+
+  ## Get analysis date from creation date of mat files
+  
+  # List all .mat files in the class directory
+  mat_files <- list.files(path = class_folder, pattern = "\\.mat$", full.names = TRUE)
+  
+  creation_dates <- data.frame(sample = NULL, analysis_date = NULL)
+  
+  for (mat in mat_files) {
+    file_info <- file.info(mat)$ctime
+    
+    temp <- data.frame(sample = sub("_class_v[0-9]+\\.mat$", "", basename(mat)), 
+                       analysis_date = as.Date(file_info))
+    
+    creation_dates <- rbind(creation_dates, temp)
+  }
+ 
+  # Store the analysis date in the list
+  analysis_date_list[[as.character(params$year[i])]] <- creation_dates 
+}
+
+# End time
+end.time <- Sys.time()
+runtime_biovolume <- round(end.time - start.time, 2)
+```
+
+## Processing Manual Data
+Here, we extract and summarize manual biovolume data (training dataset). These images are also published in the SMHI IFCB plankton image reference library (Torstensson et al. 2024).
+
+```{r get_manual_data, echo=TRUE}
+# Start time
+start.time <- Sys.time()
+
+# Extract manually annotated data
+manual_data <- ifcb_summarize_biovolumes(file.path(ifcb_path, "features"),
+                                         manual_folder,
+                                         class2use_file,
+                                         file.path(ifcb_path, "data"),
+                                         mat_recursive = FALSE)
+
+# End time
+end.time <- Sys.time()
+runtime_manual <- round(end.time - start.time, 2)
+```
+
+## Extracting Manual Analysis Date
+Here, we extract and summarize analysis date from the creation time stamps of manual data files.
+
+```{r get_manual_analysis_date, echo=TRUE}
+# List all .mat files in the class directory
+mat_files <- list.files(path = manual_folder, pattern = "\\.mat$", full.names = TRUE)
+
+manual_analysis_dates <- data.frame(sample = NULL, analysis_date = NULL)
+for (mat in mat_files) {
+  file_info <- file.info(mat)$ctime
+  
+  temp <- data.frame(sample = sub(".mat$", "", basename(mat)), analysis_date = as.Date(file_info))
+  
+  manual_analysis_dates <- rbind(manual_analysis_dates, temp)
+}
+
+manual_analysis_dates <- manual_analysis_dates %>% 
+  mutate(sample = sapply(strsplit(sample, "_"), `[`, 1))
+
+# End time
+end.time <- Sys.time()
+runtime_manual <- round(end.time - start.time, 2)
+```
+
+## Quality Control: Particle Size Distribution (PSD)
+In the PSD quality control step, we calculate the particle size distribution for each year's data according to Hayashi et al., in prep. This involves determining various parameters such as bead size, bubble presence, and biomass, ensuring that the data meets quality standards.
+
+```{r psd_check, include=TRUE, results = 'hide', echo=TRUE, message=FALSE}
+# Start time
+start.time <- Sys.time()
+
+# Initialize a list to store PSD results for each year
+psd_list <- list()
+
+for (i in seq_along(params$year)) {
+
+  # Get current data folder
+  feature_folder <- feature_folders[[i]]
+  data_folder <- data_folders[[i]]
+
+  # Define result and plot folder paths
+  psd_result_files <- file.path(ifcb_path, "psd", paste0("psd_", params$year[i]))
+  psd_plot_folder <- file.path(ifcb_path, "psd", "figures", params$year[i])
+
+  if (dir.exists(psd_plot_folder)) {
+    unlink(psd_plot_folder, recursive = TRUE)
+  }
+
+  # Calculate the particle size distribution (PSD) using IFCB data from the specified folders
+  psd <- ifcb_psd(feature_folder = feature_folder,
+                  hdr_folder = data_folder,
+                  save_data = TRUE,
+                  output_file = psd_result_files,
+                  plot_folder = psd_plot_folder,
+                  use_marker = FALSE,
+                  start_fit = 15,
+                  r_sqr = 0.5,
+                  beads = 10 ** 20,
+                  bubbles = 110,
+                  incomplete = c(1500, 3),
+                  missing_cells = 0.7,
+                  biomass = 1000,
+                  bloom = 10,
+                  humidity = 75,
+                  micron_factor = 1/3.4)
+
+  # Store PSD results in the list
+  psd_list[[as.character(params$year[i])]] <- psd
+}
+
+# End time
+end.time <- Sys.time()
+runtime_psd <- round(end.time - start.time, 2)
+```
+
+## Displaying PSD Summary
+This section prints a summary of the PSD results for each year. The summary includes a table that groups the quality flags (Q-flags) by their type and shows the number of samples associated with each flag.
+
+```{r psd_print, include=TRUE, results='asis'}
+for (i in seq_along(params$year)) {
+  # Print PSD summary
+  print(psd_list[[as.character(params$year[i])]]$flags %>%
+          group_by(flag) %>%
+          summarise("Number of samples" = n()) %>%
+          arrange(desc(`Number of samples`)) %>%
+          rename("Q-flag" = flag) %>%
+          knitr::kable(caption = paste0("PSD Summary for Year ",
+                                       params$year[i],
+                                       " (total n samples: ",
+                                       nrow(psd_list[[as.character(params$year[i])]]$fits),
+                                       ")")))
+}
+```
+
+## Coordinate Checks
+We perform a geographic check on the samples' coordinates to determine whether they are near land (i.e. in harbor) or within the Baltic basin. This check ensures the spatial accuracy of the collected data.
+
+```{r coordinate_check}
+# Initialize a list to store coordinate check results for each year
+coordinate_check_list <- list()
+
+for (i in seq_along(params$year)) {
+
+  # Get current HDR data
+  hdr_data <- hdr_data_list[[as.character(params$year[i])]]
+
+  # Create a data frame with sample names and GPS coordinates from hdr_data
+  positions <- data.frame(
+    sample = sapply(strsplit(hdr_data$sample, "_"), `[`, 1),
+    gpsLatitude = hdr_data$gpsLatitude,
+    gpsLongitude = hdr_data$gpsLongitude) %>%
+    filter(!is.na(gpsLatitude) | !is.na(gpsLongitude))
+
+  # Determine if positions are near land using specified shapefile
+  near_land <- ifcb_is_near_land(
+    positions$gpsLatitude,
+    positions$gpsLongitude,
+    distance = 500, # Släggö is about 600 m from Land
+    shape = shapefile_path)
+
+  # Determine if positions are in the Baltic basin
+  in_baltic <- ifcb_is_in_basin(
+    positions$gpsLatitude,
+    positions$gpsLongitude)
+
+  # Add the near_land and in_baltic information to the positions data frame
+  positions$near_land <- near_land
+  positions$in_baltic <- in_baltic
+  positions$basin <- ifcb_which_basin(positions$gpsLatitude, positions$gpsLongitude)
+
+  # Store coordinate check results in the list
+  coordinate_check_list[[as.character(params$year[i])]] <- positions
+}
+```
+
+## Combining Q-Flags with GPS Coordinates
+In this step, we combine the PSD quality flags with the GPS coordinates. We then categorize the flags and map the samples using different markers based on their quality.
+
+```{r q_flags, message=FALSE}
+# Initialize lists to store results for each year
+qflags_list <- list()
+date_info_list <- list()
+
+for (i in seq_along(params$year)) {
+
+  # Get current PSD flags and positions data
+  psd_flags <- psd_list[[as.character(params$year[i])]]$flags
+  positions <- coordinate_check_list[[as.character(params$year[i])]]
+
+  # Join psd$flags with positions data by "sample", add near_land_qflag, unite into flag, convert to sentence case
+  qflags <- psd_flags %>%
+    full_join(positions, by = "sample") %>%
+    mutate(near_land_qflag = ifelse(near_land, "Near land", NA)) %>%
+    unite(col = flag, flag, near_land_qflag, na.rm = TRUE, sep = ", ") %>%
+    mutate(flag = ifelse(str_to_sentence(flag) == "", NA, str_to_sentence(flag)),
+           lon = gpsLongitude,
+           lat = gpsLatitude) %>%
+    select(sample, flag, lat, lon) %>%
+    mutate(group = ifelse(is.na(flag), "blue", "red"))
+
+  # Convert filenames in biovolume_data$sample to date information
+  date_info <- ifcb_convert_filenames(qflags$sample)
+
+  # Join qflags with date_info by "sample"
+  qflags <- qflags %>%
+    left_join(date_info, by = "sample")
+
+  # Store qflags results in the list
+  qflags_list[[as.character(params$year[i])]] <- qflags
+
+  # Store date info in the list
+  date_info_list[[as.character(params$year[i])]] <- date_info
+}
+```
+
+## Visualizing QC Maps
+The QC maps visually display the samples' locations on a map, using color-coded markers to represent different quality flags. The maps are organized by month, providing an intuitive overview of the spatial distribution of the samples.
+
+```{r qc_maps, results='asis'}
+# Initialize a list to store all qc_maps HTML
+qc_maps_list <- list()
+
+for (i in seq_along(params$year)) {
+
+  # Get current Q-flags data for the year
+  qflags <- qflags_list[[as.character(params$year[i])]]
+
+  # URL to leaflet icons
+  blue_marker <- "https://raw.githubusercontent.com/pointhi/leaflet-color-markers/master/img/marker-icon-blue.png"
+  red_marker <- "https://raw.githubusercontent.com/pointhi/leaflet-color-markers/master/img/marker-icon-red.png"
+  
+  # Define the icon list with URLs for the markers
+  sampleIcons <- iconList(
+    blue = makeIcon(iconUrl = blue_marker, iconWidth = 24, iconHeight = 32),
+    red = makeIcon(iconUrl = red_marker, iconWidth = 24, iconHeight = 32)
+  )
+
+  # Create maps for each month and display them
+  month_names <- c("January", "February", "March", "April", 
+                   "May", "June", "July", "August", "September", 
+                   "October", "November", "December")
+
+  for (j in 1:12) {
+    gps_month <- qflags %>% filter(month(date) == j)
+
+    if (nrow(gps_month) > 0) {
+      map <- leaflet(data = gps_month) %>%
+        addTiles() %>%
+        addMarkers(
+          lng = ~lon,
+          lat = ~lat,
+          icon = ~sampleIcons[group],
+          popup = ~ifelse(is.na(flag), 
+                          paste("Sample:", sample), 
+                          paste("Sample:", sample, 
+                                "<br>", 
+                                "QFlag:", flag))
+        )
+      qc_maps_list <- c(qc_maps_list, paste(month_names[j], params$year[i]), list(map))
+    }
+  }
+}
+```
+
+## Rendering QC Maps
+This section renders the QC maps generated in the previous step, displaying them in the output document. All data that has coordinates are displayed here; data with Q-flags defined in params$remove_flagged_data will be removed in a later step.
+
+```{r render_qc_maps, include=TRUE}
+tagList(qc_maps_list)
+```
+
+## Analyzing Class Scores
+We analyze the classification scores for each year. This involves reading the classifier precision and detection probabilities and calculating f1-score, and summarizing the classifier's performance over time.
+
+```{r class_scores, message=FALSE}
+# Initialize a list to store class_scores data frames for each year
+class_scores_list <- list()
+
+for (i in seq_along(params$year)) {
+
+  # Get current class_folder and classifier
+  class_folder <- class_folders[[i]]
+
+  # List all files in the class_folder with full path names
+  class_files <- list.files(class_folder, full.names = TRUE)
+
+  # Extract the classifier name from the first file in class_files
+  classifier <- ifcb_get_mat_variable(class_files[1], "classifierName")[1]
+
+  # Replace å in Tångesund
+  classifier <- gsub("\xe5", "å", classifier, useBytes = TRUE)
+  
+  # Construct the class_score_file name based on params$threshold and classifier
+  if (grepl("mat", classifier)) {
+      class_score_file <- gsub(".mat", ifelse(params$threshold == "opt" | params$threshold == "adhoc",
+                                          paste0("_", params$threshold, ".csv"),
+                                          ""),
+                           classifier)
+  } else {
+    class_score_file <- paste0(classifier, ifelse(params$threshold == "opt" | params$threshold == "adhoc",
+                                          paste0("_", params$threshold, ".csv"),
+                                          ""))
+  }
+
+  # Remap path to cross-platform path
+  if (!ifcb_path == "Z:/data") {
+        
+    # Replace the backslashes with forward slashes for consistency
+    path_string <- gsub("\\\\", "/", class_score_file)
+    
+    # Replace volume path
+    path_string <- gsub("Z:/data", ifcb_path, path_string)
+    
+    # Split the path into components
+    path_components <- strsplit(path_string, "/")[[1]]
+    
+    # Reassemble the path using file.path
+    class_score_file <- do.call(file.path, as.list(path_components))
+  }
+
+  # Check if the class_score_file exists
+  if (file.exists(class_score_file)) {
+    # Read the class scores from the CSV file
+    class_scores <- read_csv(class_score_file,
+                             show_col_types = FALSE)
+  } else {
+    # Create a data frame with unique class names and NA values for PR, PD, and PM
+    class_scores <- data.frame(class = unique(biovolume_data$class),
+                               precision = NA,
+                               detection_probability = NA,
+                               miss_probability = NA)
+  }
+
+  # Calculate F1-score
+  class_scores <- class_scores %>%
+    mutate_all(~ifelse(is.nan(.), NA, .)) %>%
+    mutate(f1 = 2 * (precision * detection_probability) / (precision + detection_probability)) 
+  
+  # Store class_scores in the list
+  class_scores_list[[as.character(params$year[i])]] <- class_scores
+}
+```
+
+## Cleaning and Matching Class Names
+Here, we clean the taxonomic class names and match them with records from the WoRMS database. This step ensures that the classifications are standardized and accurate.
+
+```{r class_names, message=FALSE}
+# Initialize a list to store class_names data frames for each year
+class_names_list <- list()
+
+for (i in seq_along(params$year)) {
+  
+  # Get current class_scores and biovolume_data for the year
+  class_scores <- class_scores_list[[as.character(params$year[i])]]
+  biovolume_data <- biovolume_data_list[[as.character(params$year[i])]]
+
+  # Extract unique taxa names from biovolume_data and manual_data
+  taxa_names <- unique(biovolume_data$class)
+  manual_taxa_names <- unique(manual_data$class)
+
+  # Combine manual and class names
+  taxa_names <- c(taxa_names, manual_taxa_names)
+  
+  # Clean taxa_names by substituting specific patterns with spaces or empty strings
+  taxa_names_clean <- gsub("_", " ", taxa_names)
+  taxa_names_clean <- gsub(" single cell", "", taxa_names_clean)
+  taxa_names_clean <- gsub(" chain", "", taxa_names_clean)
+  taxa_names_clean <- gsub(" coil", "", taxa_names_clean)
+  taxa_names_clean <- gsub(" filament", "", taxa_names_clean)
+  taxa_names_clean <- gsub(" pair", "", taxa_names_clean)
+  taxa_names_clean <- gsub("-like", "", taxa_names_clean)
+  taxa_names_clean <- gsub(" like", "", taxa_names_clean)
+  taxa_names_clean <- gsub(" bundle", "", taxa_names_clean)
+  taxa_names_clean <- gsub(" larger than 30", "", taxa_names_clean)
+  taxa_names_clean <- gsub(" larger than 30unidentified", "", taxa_names_clean)
+  taxa_names_clean <- gsub(" smaller than 30unidentified", "", taxa_names_clean)
+  taxa_names_clean <- gsub(" smaller than 30", "", taxa_names_clean)
+  
+  # Remove species flags from class names
+  taxa_names_clean <- gsub("\\<cf\\>", "", taxa_names_clean)
+  taxa_names_clean <- gsub("\\<spp\\>", "", taxa_names_clean)
+  taxa_names_clean <- gsub("\\<sp\\>", "", taxa_names_clean)
+  taxa_names_clean <- gsub(" group", "", taxa_names_clean)
+  taxa_names_clean <- gsub("  ", " ", taxa_names_clean)
+  
+  # Add "/" for multiple names with capital letters
+  # e.g. Snowella_Woronichinia to Snowella/Woronichinia
+  taxa_names_clean <- gsub(" ([A-Z])", "/\\1", taxa_names_clean)
+  taxa_names_clean <- gsub(" ([A-Z])", "/\\1", taxa_names_clean)
+  
+  # Use the first name of combined classes, 
+  # e.g. Nodularia_spumigena_coil,Nodularia_spumigena_filament to Nodularia spumigena
+  taxa_names_clean <- sapply(strsplit(taxa_names_clean, ","), `[`, 1)
+
+  # Remove any whitespace
+  taxa_names_clean <- trimws(taxa_names_clean)
+
+  # Initialize variables
+  worms_records <- NULL
+  attempt <- 1
+  
+  # Retrieve worms records with retry mechanism
+  while(attempt <= 5) {
+    tryCatch({
+      worms_records <- wm_records_names(taxa_names_clean, marine_only = FALSE)
+      if (!is.null(worms_records)) break  # Exit the loop if successful
+    }, error = function(err) {
+      if (attempt == max_retries) {
+        stop("Error occurred while retrieving worms records after ", max_retries, " attempts: ", conditionMessage(err))
+      } else {
+        message("Attempt ", attempt, " failed: ", conditionMessage(err), " - Retrying...")
+        Sys.sleep(60)  # Pause for 60 s before retrying
+      }
+    })
+
+    attempt <- attempt + 1
+  }
+  
+  # Extract Aphia IDs and class names from WoRMS
+  aphia_id <- sapply(worms_records, iRfcb:::extract_aphia_id)
+  classes <- sapply(worms_records, iRfcb:::extract_class)
+
+  # Create class_names data frame with taxa information
+  class_names <- data.frame(class = taxa_names,
+                            class_clean = taxa_names_clean,
+                            aphia_id,
+                            worms_class = classes,
+                            sflag = ifelse(grepl("-like", taxa_names) | 
+                                             grepl("_cf_", taxa_names)| 
+                                             grepl("_like", taxa_names),
+                                           "CF", NA),
+                            is_diatom = ifcb_is_diatom(taxa_names_clean)) %>%
+    mutate(sflag = ifelse(grepl("\\<spp\\>", gsub("_", " ", taxa_names)), 
+                          paste(ifelse(is.na(sflag), "", sflag), "SPP"), 
+                          sflag)) %>%
+    mutate(sflag = ifelse(grepl("\\<group\\>", gsub("_", " ", taxa_names)), 
+                          paste(ifelse(is.na(sflag), "", sflag), "GRP"), 
+                          sflag)) %>%
+    mutate(sflag = ifelse(grepl("\\<sp\\>", gsub("_", " ", taxa_names)), 
+                          paste(ifelse(is.na(sflag), "", sflag), "SP"), 
+                          sflag)) %>%
+    mutate(sflag = str_trim(sflag)) %>%
+    mutate(trophic_type = ifcb_get_trophic_type(class_clean)) %>%
+    left_join(class_scores_list[[as.character(params$year[i])]], by = "class") %>%
+    distinct()
+
+  # Store class_names in the list
+  class_names_list[[as.character(params$year[i])]] <- class_names
+}
+```
+
+## Printing Class Summaries
+This section prints the cleaned and matched class names for each year, providing a summary that includes additional details such as trophic type and classification flags.
+
+```{r print_class_names, include=TRUE, results='asis'}
+# Loop through each year
+for (i in seq_along(params$year)) {
+  # Print the class_names data frame for the current year
+  print(class_names_list[[as.character(params$year[i])]] %>%
+          mutate(f1 = round(f1, 4)) %>%
+          select(-worms_class, -precision, -detection_probability, -miss_probability) %>%
+          arrange(class) %>%
+          knitr::kable(caption = paste("Class Summary for Year", params$year[i])))
+}
+```
+
+## Merging Data
+In the final data processing step, we merge the biovolume data, HDR data, ferrybox data, qflags, cruise numbers and coordinates etc into yearly data frames. 
+
+```{r merge_data, message=FALSE}
+# Initialize a list to store aggregated data frames for each year
+data_aggregated_list <- list()
+
+for (i in seq_along(params$year)) {
+
+  # Extract relevant data frames for the current year
+  biovolume_data <- biovolume_data_list[[as.character(params$year[i])]]
+  date_info <- hdr_data_list[[as.character(params$year[i])]] %>%
+    mutate(sample = sapply(strsplit(sample, "_"), `[`, 1)) %>%
+    select(-gpsLatitude, -gpsLongitude)
+  qflags_select <- select(qflags_list[[as.character(params$year[i])]], sample, flag)
+  positions <- coordinate_check_list[[as.character(params$year[i])]]
+  class_names <- class_names_list[[as.character(params$year[i])]]
+  ferrybox_data <- ferrbyox_data_list[[as.character(params$year[i])]]
+  analysis_date <- analysis_date_list[[as.character(params$year[i])]] %>%
+    mutate(sample = sapply(strsplit(sample, "_"), `[`, 1))
+  cruise_numbers <- svepa_list[[as.character(params$year[i])]]
+
+  # Perform multiple joins to combine data from multiple sources for the current year
+  data <- biovolume_data %>%
+    left_join(sample_depth, by = "sample") %>%
+    mutate(sample = sapply(strsplit(sample, "_"), `[`, 1)) %>%
+    left_join(date_info, by = "sample") %>%
+    left_join(qflags_select, by = "sample") %>%
+    left_join(positions, by = "sample") %>%
+    left_join(class_names, by = "class") %>%
+    left_join(analysis_date, by = "sample") %>%
+    left_join(cruise_numbers, by = "sample") %>%
+    mutate(verification = NA,
+           classifier_created_by = "Anders Torstensson",
+           classifier_used = paste0("SMHI-", params$classifier, " v.", max_versions[[i]]))
+
+  # Perform multiple joins to combine manual data from multiple sources for the current year
+  data_manual <- manual_data %>%
+    left_join(sample_depth, by = "sample") %>%
+    mutate(sample = sapply(strsplit(sample, "_"), `[`, 1)) %>%
+    left_join(date_info, by = "sample") %>%
+    filter(year == params$year[i]) %>%
+    left_join(positions, by = "sample") %>%
+    left_join(qflags_select, by = "sample") %>%
+    left_join(class_names, by = "class") %>%
+    left_join(manual_analysis_dates, by = "sample") %>%
+    left_join(cruise_numbers, by = "sample") %>%
+    select(-precision, -detection_probability, -miss_probability, -f1) %>%
+    mutate(verification = "ValidatedByHuman",
+           classifier_created_by = NA,
+           classifier_used = NA)
+  
+  # Combine human verified data (manual annotations) with automatic classification
+  data_aggregated <- bind_rows(data, data_manual)
+
+  # Combine with ferrybox data, remove data with bad data flags (3 and above)
+  data_aggregated <- data_aggregated %>%
+    left_join(ferrybox_data, by = "timestamp") %>%
+    mutate(`80070` = ifelse(`70` < 3, `80070`, NA),
+           `8063` = ifelse(`88063` < 3, `8063`, NA),
+           `8165` = ifelse(`88165` < 3, `8165`, NA),
+           `8173` = ifelse(`88173` < 3, `8173`, NA),
+           `8166` = ifelse(`88166` < 3, `8166`, NA),
+           `8172` = ifelse(`88172` < 3, `8172`, NA),
+           `8174` = ifelse(`88174` < 3, `8174`, NA),
+           `8177` = ifelse(`88177` < 3, `8177`, NA),
+           `8179` = ifelse(`88179` < 3, `8179`, NA),
+           `8181` = ifelse(`88181` < 3, `8181`, NA),
+           `8190` = ifelse(`88190` < 3, `8190`, NA),
+           `8191` = ifelse(`88191` < 3, `8191`, NA),
+           )
+  
+  # Filter data from the classifier region, when specified in params
+  if (params$regional) {
+    if (params$classifier == "Baltic") {
+      data_aggregated <- data_aggregated %>%
+        filter(in_baltic)
+    } else {
+      data_aggregated <- data_aggregated %>%
+        filter(!in_baltic)
+    }
+  }
+
+  # Store aggregated data for the current year in the list
+  data_aggregated_list[[as.character(params$year[i])]] <- data_aggregated
+}
+```
+
+## Monthly Mean Counts per Liter by Basin
+This section calculates and visualizes the monthly mean counts per liter of plankton for each basin, distinguishing between flagged and unflagged data. The visualization helps in understanding the distribution and trends in plankton counts across different basins over the year.
+
+```{r plot_data, message=FALSE}
+# Initialize a list to store plots for each year
+plots <- list()
+
+for (i in seq_along(params$year)) {
+
+  # Extract data for the current year
+  data_aggregated_year <- data_aggregated_list[[as.character(params$year[i])]]
+
+  # Get unique worms classes
+  worms_classes <- unique(data_aggregated_year$worms_class)
+
+  # Initialize a list to store plots for the current year and worms class
+  year_plots <- list()
+
+  for (worms_class in worms_classes) {
+
+    # Filter data for the current worms class
+    data_worms_class <- data_aggregated_year %>%
+      filter(worms_class == !!worms_class)
+
+    # Calculate monthly means and plot for all data
+    plot_all <- data_worms_class %>%
+      group_by(basin, month) %>%
+      summarise(mean = mean(counts_per_liter, na.rm = TRUE),
+                sd = sd(counts_per_liter, na.rm = TRUE),
+                .groups = "drop") %>%
+      ggplot(aes(x = month, y = mean, color = basin)) +
+      geom_point() +
+      geom_errorbar(aes(ymin = mean - sd, ymax = mean + sd), width = 0.2) +
+      labs(title = paste0(params$year[i], ", ", worms_class, ", all data"),
+           x = "Month",
+           y = "Counts per Liter",
+           color = "Basin") +
+      scale_x_discrete(limits = as.character(1:12)) +  # Set x-axis limits to all month names
+      theme_minimal() +
+      theme(legend.position = "bottom")
+
+    # Calculate monthly means and plot for data without Q-flag
+    plot_no_flag <- data_worms_class %>%
+      filter(is.na(flag)) %>%
+      group_by(basin, month) %>%
+      summarise(mean = mean(counts_per_liter, na.rm = TRUE),
+                sd = sd(counts_per_liter, na.rm = TRUE),
+                .groups = "drop") %>%
+      ggplot(aes(x = month, y = mean, color = basin)) +
+      geom_point() +
+      geom_errorbar(aes(ymin = mean - sd, ymax = mean + sd), width = 0.2) +
+      labs(title = paste0(worms_class, ", no flagged data"),
+           x = "Month",
+           y = "Counts per Liter",
+           color = "Basin") +
+      scale_x_discrete(limits = as.character(1:12)) +  # Set x-axis limits to all month names
+      theme_minimal() +
+      theme(legend.position = "bottom")
+
+    # Combine the two plots with a shared legend
+    combined_plot <- plot_all + 
+      plot_no_flag + 
+      plot_layout(guides = "collect") & theme(legend.position = "bottom")
+
+    # Store combined plot for the current worms class
+    year_plots[[worms_class]] <- combined_plot
+  }
+
+  # Store all worms_class plots for the current year
+  plots[[as.character(params$year[i])]] <- year_plots
+}
+
+# Print combined plots for each year and each worms_class
+for (i in seq_along(params$year)) {
+  for (worms_class in names(plots[[as.character(params$year[i])]])) {
+    print(plots[[as.character(params$year[i])]][[worms_class]])
+  }
+}
+
+```
+
+# SHARK Export
+In this section, the processed data is formatted and prepared for export to the SHARK database. The code maps relevant data columns to SHARK's required format, ensuring that all necessary information, such as geographic coordinates, sampling details, and plankton counts, is correctly structured. Data with Q-flags defined in params$remove_flagged_data are removed in this step.
+
+```{r format_shark, message=FALSE}
+# Initialize a list to store shark_df for each year
+shark_dfs <- list()
+
+for (i in seq_along(params$year)) {
+
+  # Extract data for the current year
+  data_aggregated_year <- data_aggregated_list[[as.character(params$year[i])]]
+
+  # Remove samples before and after a bubble run, as these samples often contain poor images
+  if ("bubbles" %in% params$remove_flagged_data) {
+    
+    # Identify the indices where the flag contains "bubbles"
+    bubbles_indices <- which(grepl("bubbles", tolower(data_aggregated_year$flag), fixed = TRUE))
+    
+    # Find the indices before and after the "bubbles" samples
+    before_indices <- bubbles_indices - 1
+    after_indices <- bubbles_indices + 1
+    
+    # Remove indices that are out of bounds
+    before_indices <- before_indices[before_indices > 0]
+    after_indices <- after_indices[after_indices <= nrow(data_aggregated_year)]
+    
+    # Extract the samples before and after the "bubbles" samples
+    samples_before <- data_aggregated_year$sample[before_indices]
+    samples_after <- data_aggregated_year$sample[after_indices]
+    
+    # Combine the results into a data frame for easier viewing
+    adjacent_bubble_samples <- data.frame(
+      BubblesSample = data_aggregated_year$sample[bubbles_indices],
+      SampleBefore = samples_before,
+      SampleAfter = samples_after
+    )
+
+    # Remove data from samples before and after bubble runs
+    data_aggregated_year <- data_aggregated_year %>%
+      filter(!sample %in% adjacent_bubble_samples$SampleBefore) %>%
+      filter(!sample %in% adjacent_bubble_samples$SampleAfter)
+  }
+  
+  # Filter flagged data
+  data_aggregated_year <- data_aggregated_year[!sapply(data_aggregated_year$flag, function(x) {
+    any(sapply(params$remove_flagged_data, function(y) grepl(y, tolower(x), fixed = TRUE)))
+  }), ]
+  
+  # Function to check if a column is entirely NA
+  is_all_na <- function(x) {
+    all(is.na(x))
+  }
+  
+  # Extract unclassified data and ferrybox data
+  unclassified <- data_aggregated_year %>%
+    filter(class_clean == "unclassified") %>%
+    select(-worms_class, -class_clean, -aphia_id, -sflag, -trophic_type, -is_diatom, -biovolume_mm3, -carbon_ug, 
+           -class, -precision, -detection_probability, -miss_probability, -f1, -carbon_ug_per_liter) %>%
+    rename(unclassified_counts = counts,
+           unclassified_abundance = counts_per_liter,
+           unclassified_volume = biovolume_mm3_per_liter,
+           ph = `70`,
+           chl = `8063`,
+           cdom = `8165`,
+           pc = `8173`,
+           pe = `8166`,
+           waterflow = `8172`,
+           turb = `8174`,
+           pco2 = `8177`,
+           watertemp = `8179`,
+           salinity = `8181`,
+           oxygen_saturation = `8190`,
+           oxygen_ml_l = `8191`) %>%
+  mutate(across(all_of(intersect(c("ph", "chl", "cdom", "pc", "pe", 
+                                   "waterflow", "turb", "pco2", "oxygen_saturation"), 
+                                 names(.)[!sapply(., is_all_na)])),
+                ~ na_if(.x, -999))) %>% # Replace -999 values with NA
+  mutate(across(all_of(intersect(c("ph", "pco2"), 
+                                 names(.)[!sapply(., is_all_na)])),
+                ~ na_if(.x, 0))) # Replace 0 values with NA
+  
+  # Remove unclassified from main data frame and bind with unclassified and ferrybox data
+  data_aggregated_year <- data_aggregated_year %>%
+    filter(!class_clean == "unclassified") %>%
+    bind_rows(unclassified) %>%
+    arrange(desc(verification), sample, class_clean)
+  
+  # Retrieve column names for Shark database integration
+  shark_col <- ifcb_get_shark_colnames()
+
+  # Create a data frame with empty rows matching the length of data
+  shark_col[1:nrow(data_aggregated_year),] <- ""
+
+  if (params$classifier == "Tångesund") {
+    station_name <- data_aggregated_year$sample
+    depth <- data_aggregated_year$depth
+  } else {
+    station_name <- paste0("RV_FB_", data_aggregated_year$sample)
+    depth <- 4
+  }
+  
+  # Create shark_df by mapping relevant data from 'data' to Shark database columns
+  shark_df <- shark_col %>%
+    mutate(MYEAR = data_aggregated_year$year,
+           STATN = station_name,
+           SAMPLING_PLATFORM = data_aggregated_year$ifcb_number,
+           PROJ = ifelse(params$year[i] < 2025, "IFCB, DTO, JERICO", "IFCB"),
+           ORDERER = "SMHI",
+           SHIPC = ifelse(params$classifier == "Tångesund", NA, "77SE"),
+           CRUISE_NO = data_aggregated_year$cruise_number,
+           SDATE = data_aggregated_year$date,
+           DATE_TIME = format(data_aggregated_year$timestamp, "%Y%m%d%H%M%S"),
+           TIMEZONE = "UTC",
+           STIME = data_aggregated_year$time,
+           LATIT = data_aggregated_year$gpsLatitude,
+           LONGI = data_aggregated_year$gpsLongitude,
+           POSYS = "GPS",
+           PDMET = ifelse(params$classifier == "Tångesund", "SEP", "MIX"),
+           METFP = "None",
+           IFCBNO	= data_aggregated_year$ifcb_number,
+           MPROG = "PROJ",
+           MNDEP = depth,
+           MXDEP = depth,
+           SLABO = "SMHI",
+           ACKR_SMP = "N",
+           SMTYP = ifelse(params$classifier == "Tångesund", NA, "FerryBox"),
+           SMVOL = round(data_aggregated_year$ml_analyzed, 3), # VOLUME
+           SMPNO = data_aggregated_year$sample, # SAMPLE NAME
+           LATNM = data_aggregated_year$class_clean, # SPECIES
+           SFLAG = data_aggregated_year$sflag, # SP or SPP
+           TRPHY = data_aggregated_year$trophic_type,
+           APHIA_ID = data_aggregated_year$aphia_id,
+           IMAGE_VERIFICATION = data_aggregated_year$verification,
+           CLASS_NAME = data_aggregated_year$class,
+           CLASS_F1 = data_aggregated_year$f1,
+           COUNT = data_aggregated_year$counts, # COUNTS per SAMPLE
+           COEFF = round(1000/data_aggregated_year$ml_analyzed, 1),
+           ABUND = round(data_aggregated_year$counts_per_liter, 1), #COUNTS PER LITER
+           QFLAG = data_aggregated_year$flag,
+           C_CONC = signif(data_aggregated_year$carbon_ug_per_liter, 6), # CARBON PER LITER
+           BIOVOL = signif(data_aggregated_year$biovolume_mm3_per_liter, 6), # BIOVOLUME PER LITER
+           METOA = "IMA",
+           COUNTPROG = paste("ifcb-analysis, iRfcb", packageVersion("iRfcb")),
+           ALABO = "SMHI",
+           ACKR_ANA = "N",
+           ANADATE = data_aggregated_year$analysis_date,
+           METDC = paste("https://github.com/hsosik/ifcb-analysis",
+                         "https://github.com/kudelalab/PSD",
+                         "https://github.com/EuropeanIFCBGroup/iRfcb",
+                         sep = ", "), # METHOD
+           TRAINING_SET_ANNOTATED_BY = "Ann-Turi Skjevik",
+           TRAINING_SET = "https://doi.org/10.17044/scilifelab.25883455.v3",
+           CLASSIFIER_CREATED_BY = data_aggregated_year$classifier_created_by,
+           CLASSIFIER_USED = basename(gsub("\\\\", "/", iconv(data_aggregated_year$classifier, from = "Windows-1252", to = "UTF-8"))),
+           MANUAL_QC_DATE = Sys.Date(),
+           PRE_FILTER_SIZE ="150", # unit um
+           UNCLASSIFIED_COUNTS = round(data_aggregated_year$unclassified_counts, 1),
+           UNCLASSIFIED_ABUNDANCE = signif(data_aggregated_year$unclassified_abundance, 6),
+           UNCLASSIFIED_VOLUME = signif(data_aggregated_year$unclassified_volume, 6),
+           PH_FB = round(data_aggregated_year$ph, 3),
+           CHL_FB = round(data_aggregated_year$chl, 4),
+           CDOM_FB = round(data_aggregated_year$cdom, 4),
+           PHYC_FB = data_aggregated_year$pc,
+           PHER_FB = round(data_aggregated_year$pe, 4),
+           WATERFLOW_FB = round(data_aggregated_year$waterflow, 4),
+           TURB_FB = round(data_aggregated_year$turb, 4),
+           PCO2_FB = data_aggregated_year$pco2,
+           TEMP_FB = round(data_aggregated_year$watertemp, 4),
+           PSAL_FB = round(data_aggregated_year$salinity, 4),
+           OSAT_FB = round(data_aggregated_year$oxygen_saturation, 4),
+           DOXY_FB = round(data_aggregated_year$oxygen_ml_l, 4)
+    )
+
+  # Store shark_df for the current year in the list
+  shark_dfs[[as.character(params$year[i])]] <- shark_df
+}
+
+# Concatenate all shark_dfs into a single data frame
+shark_df_combined <- do.call(rbind, shark_dfs)
+```
+
+## Data Delivery
+Here, the processed data and corresponding metadata (including delivery notes) are organized into appropriate directories. The data is saved in both the "processed" and "received" folders, ensuring it is well-documented and ready for submission to the SHARK database.
+
+```{r data_delivery, message=FALSE}
+if (params$multiyear_delivery) {
+  # Define data delivery path
+  data_delivery_path <- file.path(output_folder, paste0("SHARK_IFCB_", 
+                                                        paste(min(params$year), max(params$year), sep = "_"), 
+                                                        "_", 
+                                                        params$classifier, 
+                                                        "_SMHI"))
+  
+  # Define paths for processed, received, and correspondence data folders for current year
+  processed_data <- file.path(data_delivery_path, "processed_data")
+  received_data <- file.path(data_delivery_path, "received_data")
+  correspondence <- file.path(data_delivery_path, "correspondence")
+  
+  # Create directories if they do not exist
+  if (!dir.exists(processed_data)) {
+    dir.create(processed_data, recursive = TRUE)
+  }
+  
+  if (!dir.exists(received_data)) {
+    dir.create(received_data, recursive = TRUE)
+  }
+  
+  if (!dir.exists(correspondence)) {
+    dir.create(correspondence, recursive = TRUE)
+  }
+  
+  # Save shark_df data to a tab-delimited file in processed_data folder for current year
+  write_tsv(shark_df_combined, file = file.path(processed_data, "data.txt"), na = "") # Save as tab-delimited file
+  
+  # Save shark_df data to a tab-delimited file in received_data folder with dynamic filename
+  filename <- paste0("shark_data_", 
+                     paste(min(params$year), max(params$year), sep = "_"), "_", 
+                     tolower(params$classifier), "_", 
+                     Sys.Date(), ".txt")
+  write_tsv(shark_df_combined, file = file.path(received_data, filename), na = "") # Save as tab-delimited file
+  
+  # Define delivery note content as a character vector for current year
+  delivery_note_content <- c(
+    paste("provtagningsår:", paste(min(params$year), max(params$year), sep = "-")),
+    "datatyp: IFCB",
+    "rapporterande institut: SMHI",
+    paste("rapporteringsdatum:", Sys.Date()),
+    "kontaktperson: Anders Torstensson",
+    "format: Phytoplankton:PP_SMHI",
+    "data kontrollerad av: Leverantör",
+    "övervakningsprogram:",
+    "beställare: SMHI",
+    "projekt:",
+    "kommentarer:",
+    "status: test"
+  )
+  
+  # Write delivery note content to a .txt file in processed_data folder for current year
+  writeLines(delivery_note_content, file.path(processed_data, "delivery_note.txt"))
+  
+} else {
+  
+  # Initialize lists to store paths and delivery note contents for each year
+  processed_data_paths <- list()
+  received_data_paths <- list()
+  delivery_notes <- list()
+  data_delivery_paths <- list()
+  
+  # Loop through each year
+  for (i in seq_along(params$year)) {
+    # Define data deliviery path
+    data_delivery_path <- file.path(output_folder, paste0("SHARK_IFCB_", 
+                                                          as.character(params$year[i]), 
+                                                          "_", 
+                                                          params$classifier, 
+                                                          "_SMHI"))
+    
+    # Define paths for processed, received, and correspondence data folders for current year
+    processed_data <- file.path(data_delivery_path, "processed_data")
+    received_data <- file.path(data_delivery_path, "received_data")
+    correspondence <- file.path(data_delivery_path, "correspondence")
+    
+    # Create directories if they do not exist
+    if (!dir.exists(processed_data)) {
+      dir.create(processed_data, recursive = TRUE)
+    }
+    
+    if (!dir.exists(received_data)) {
+      dir.create(received_data, recursive = TRUE)
+    }
+    
+    if (!dir.exists(correspondence)) {
+      dir.create(correspondence, recursive = TRUE)
+    }
+    
+    # Save shark_df data to a tab-delimited file in processed_data folder for current year
+    shark_df_year <- shark_dfs[[as.character(params$year[i])]] # Retrieve shark_df for current year
+    write_tsv(shark_df_year, file = file.path(processed_data, "data.txt"), na = "") # Save as tab-delimited file
+    
+    # Save shark_df data to a tab-delimited file in received_data folder with dynamic filename
+    filename <- paste0("shark_data_", 
+                       as.character(params$year[i]), "_", 
+                       tolower(params$classifier), "_", 
+                       Sys.Date(), ".txt")
+    write_tsv(shark_df_year, file = file.path(received_data, filename), na = "") # Save as tab-delimited file
+    
+    # Define delivery note content as a character vector for current year
+    delivery_note_content <- c(
+      paste("provtagningsår:", params$year[i]),
+      "datatyp: IFCB",
+      "rapporterande institut: SMHI",
+      paste("rapporteringsdatum:", Sys.Date()),
+      "kontaktperson: Anders Torstensson",
+      "format: Phytoplankton:PP_SMHI",
+      "data kontrollerad av: Leverantör",
+      "övervakningsprogram:",
+      "beställare: SMHI",
+      "projekt:",
+      "kommentarer:",
+      "status: test"
+    )
+    
+    # Write delivery note content to a .txt file in processed_data folder for current year
+    writeLines(delivery_note_content, file.path(processed_data, "delivery_note.txt"))
+    
+    # Store paths and delivery notes for current year
+    data_delivery_paths[[as.character(params$year[i])]] <- data_delivery_path
+  }
+  
+  # Print paths and confirmation message for each year
+  cat("Data delivery saved in", output_folder, "\n")
+  for (i in seq_along(params$year)) {
+    cat("Year:", params$year[i], "- data package:", data_delivery_paths[[as.character(params$year[i])]], "\n")
+  }
+}
+
+
+end.time <- Sys.time()
+runtime_knit <- round(end.time - knit.time, 2)
+```
+
+## Summarize Runtimes
+This section provides a summary of the time taken to run various parts of the script, such as extracting HDR data, analyzing particle size distribution, and generating the entire report. This helps in identifying the computational efficiency of the pipeline.
+
+```{r runtime_summary}
+runtime_variables <- c("running the whole script",
+                       "extracting HDR data",
+                       "extracting cruise numbers",
+                       "extracting count and biovolume data",
+                       "extracting manual count data",
+                       "analysing PSD")
+
+runtime_values <- c(runtime_knit, runtime_hdr, runtime_svepa, runtime_biovolume, runtime_manual, runtime_psd)
+
+for (i in seq_along(runtime_variables)) {
+  cat("Time taken for ", runtime_variables[i], ": ", round(runtime_values[i]/3600, 2), "h", "\n", sep = "")
+}
+```
+
+## Reproducibility
+To ensure that the results can be reproduced in the future, this section records the session information, including the date and time when the script was run and details about the R environment used. This information is crucial for validating and reproducing the analysis.
+
+```{r reproducibility}
+# Date time
+cat("Time started:", format(knit.time), "\n")
+cat("Time finished:", format(Sys.time()), "\n")
+
+# Here we store the session info for this script
+sessioninfo::session_info()
+```
+
+## References
+- Hayashi, K., Walton, J., Lie, A., Smith, J. and Kudela M. Using particle size distribution (PSD) to automate imaging flow cytobot (IFCB) data quality in coastal California, USA. In prep.
+- Sosik, H. M. and Olson, R. J. (2007), Automated taxonomic classification of phytoplankton sampled with imaging-in-flow cytometry. Limnol. Oceanogr: Methods 5, 204-216.
+- Torstensson, Anders; Skjevik, Ann-Turi; Mohlin, Malin; Karlberg, Maria; Karlson, Bengt (2024). SMHI IFCB plankton image reference library. SciLifeLab. Dataset. doi:10.17044/scilifelab.25883455
+
+```{r citation, echo=FALSE}
+citation(package = "iRfcb")
+```
