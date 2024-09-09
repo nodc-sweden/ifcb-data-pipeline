@@ -2,7 +2,7 @@
 
 ## Overview
 
-This repository contains the SMHI IFCB Data Pipeline, an R-based tool for processing and exporting pre-classified data from the Imaging FlowCytobot (IFCB) to [SHARK](https://sharkweb.smhi.se/). The data has already been classified using a Random Forest algorithm with the MATLAB package [`ifcb-analysis`](https://github.com/hsosik/ifcb-analysis) (Sosik and Olson, 2007). This pipeline focuses on subsequent steps like data cleaning, biovolume calculation, quality control, and export to the SHARK database.
+This repository contains the SMHI IFCB Data Pipeline, an R-based tool for processing and exporting pre-classified data from the Imaging FlowCytobot (IFCB) to [SHARK](https://sharkweb.smhi.se/). The data has already been classified using a Random Forest algorithm with the MATLAB package [`ifcb-analysis`](https://github.com/hsosik/ifcb-analysis) (Sosik and Olson, 2007). This pipeline focuses on subsequent steps like data cleaning, biovolume calculation, quality control, and export to the SHARK database. The pipeline relies heavily on functions from the [`iRfcb`](https://github.com/EuropeanIFCBGroup/iRfcb) R package.
 
 ### Key Features
 - **Biovolume Calculation**: Computes biovolume based on the size and shape of detected particles.
@@ -19,11 +19,15 @@ This repository contains the SMHI IFCB Data Pipeline, an R-based tool for proces
 
 1. **Clone the repository**:  
    ```
-   git clone https://github.com/your-username/ifcb-data-pipeline.git
-   cd ifcb-data-pipeline
+   git clone https://github.com/nodc-sweden/ifcb-data-pipeline.git
    ```
 
-2. **Install necessary packages**:  
+2. **Install Python**:  
+   The pipeline uses Python for some data processing tasks using `reticulate`. To set up Python:
+   - Install Python (version > 3.10 is recommended)
+   - A virtual environment is created in the pipeline using `iRfcb::py_install()`
+
+3. **Install necessary packages**:  
    In R: Ensure you have the required R packages installed by running:
    ```r
    install.packages(c("tidyverse", "worrms", "knitr", "rmarkdown", "leaflet", 
@@ -33,8 +37,8 @@ This repository contains the SMHI IFCB Data Pipeline, an R-based tool for proces
    devtools::install_github("EuropeanIFCBGroup/iRfcb", dependencies = TRUE)
    ```
    
-3. **Edit environmental variables**:  
-   Set your paths as .Renviron project variables:
+4. **Edit environmental variables**:  
+   Open the project and set your paths as .Renviron variables:
    ```r
    # Copy template
    file.copy(".Renviron-template", ".Renviron")
@@ -42,11 +46,6 @@ This repository contains the SMHI IFCB Data Pipeline, an R-based tool for proces
    # Edit file
    usethis::edit_r_environ("project")
    ```
-
-4. **Install Python**:  
-   The pipeline uses Python for some data processing tasks using `reticulate`. To set up Python:
-   - Install Python (version > 3.10 is recommended)
-   - A virtual environment is created in the pipeline using `iRfcb::py_install()`
 
 5. **Define parameters**:  
    Update the parameters inside the `ifcb-data-pipeline.Rmd` file to suit your data processing needs, including:
