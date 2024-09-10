@@ -21,8 +21,6 @@ This document summarizes the annotated image export process from the Imaging Flo
 
 IFCB images has been manually labelled using the MATLAB package [`ifcb-analysis`](https://github.com/hsosik/ifcb-analysis) (Sosik and Olson 2007). The image export pipeline involves three key steps: extracting .png images organized in subfolders for each class, creating zip-archives for .png images, and creating zip-archives for MATLAB and raw data files. This process is facilitated by the R package [`iRfcb`](https://github.com/EuropeanIFCBGroup/iRfcb) (Torstensson 2024).
 
-NOTE: If you want a general README files included in the MANIFEST.txt, add it before running the create_manifest chunk.
-
 ## Setup
 
 ```{r setup}
@@ -83,7 +81,7 @@ output_folder <- file.path(ifcb_path, "figshare", paste0("v", params$version))
 ```
 
 ## Extract PNG Images
-Here all annotated images are extracted as .png images. The packaging of .pngs to the iRfcb archive is skipped.
+Here all annotated images are extracted as .png images. The extraction of .pngs to the iRfcb archive is skipped.
 
 ```{r extract_pngs, warning=FALSE}
 # Start time
@@ -130,7 +128,7 @@ runtime_zip_png <- round(end.time - start.time, 2)
 ```
 
 ## Zip MATLAB Files
-Here all the MATLAB and raw data files are packaged in zip-archives
+Here all the MATLAB and raw data files are packaged in zip-archives.
 
 ```{r zip_matlab, echo=FALSE, warning=FALSE}
 # Start time
@@ -230,7 +228,7 @@ writeLines(updated_readme, file.path(output_folder, "README.md"), useBytes = TRU
 
 
 ## Create MANIFEST
-This section creates the MANIFEST.txt for the entire output folder. Make sure to add a general README file to the output folder before executing this chunk, to have it included in the MANIFEST.
+This section creates the MANIFEST.txt for the entire output folder.
 
 ```{r create_manifest}
 ifcb_create_manifest(output_folder)
@@ -252,7 +250,6 @@ for (i in seq_along(runtime_variables)) {
 }
 ```
 
-
 ## Reproducibility
 To ensure that the results can be reproduced in the future, this section records the session information, including the date and time when the script was run and details about the R environment used. This information is crucial for validating and reproducing the analysis.
 
@@ -267,7 +264,7 @@ sessioninfo::session_info()
 
 ## References
 - Sosik, H. M. and Olson, R. J. (2007), Automated taxonomic classification of phytoplankton sampled with imaging-in-flow cytometry. Limnol. Oceanogr: Methods 5, 204-216.
-- Torstensson (2024). I 'R' FlowCytobot (iRfcb): Tools for Analyzing and Processing Data from the IFCB. R package version 0.3.7. https://doi.org/10.5281/zenodo.12533225
+- Torstensson (2024). I 'R' FlowCytobot (iRfcb): Tools for Analyzing and Processing Data from the IFCB. R package version 0.3.9. https://doi.org/10.5281/zenodo.12533225
 - Torstensson, Anders; Skjevik, Ann-Turi; Mohlin, Malin; Karlberg, Maria; Karlson, Bengt (2024). SMHI IFCB plankton image reference library. SciLifeLab. Dataset. doi:10.17044/scilifelab.25883455
 
 ```{r citation, echo=FALSE}
