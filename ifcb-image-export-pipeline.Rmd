@@ -1,0 +1,275 @@
+---
+author: "Anders Torstensson"
+date: "`r Sys.Date()`"
+params: 
+  classifier: ["Baltic", "Skagerrak-Kattegat", "Tångesund", "iRfcb"] # "Baltic", "Skagerrak-Kattegat" or "Tångesund"
+  version: 4
+ 
+output: html_document
+knit: (function(inputFile, encoding) {
+                        rmarkdown::render(inputFile,
+                        encoding=encoding, 
+                        output_file=paste0("output/html_reports/ifcb_image_export_report_",
+                        format(Sys.time(), "D%Y%m%dT%H%M"),
+                        ".html")) })
+title: "`r paste('ifcb-image-export-pipeline:', params$classifier, 'classifiers')`"
+---
+
+## Introduction
+
+This document summarizes the annotated image export process from the Imaging FlowCytobot (IFCB) to [Figshare](https://figshare.scilifelab.se/). This pipeline is used to update the [SMHI IFCB plankton image reference library](https://doi.org/10.17044/scilifelab.25883455) (Torstensson et al. 2024). 
+
+IFCB images has been manually labelled using the MATLAB package [`ifcb-analysis`](https://github.com/hsosik/ifcb-analysis) (Sosik and Olson 2007). The image export pipeline involves three key steps: extracting .png images organized in subfolders for each class, creating zip-archives for .png images, and creating zip-archives for MATLAB and raw data files. This process is facilitated by the R package [`iRfcb`](https://github.com/EuropeanIFCBGroup/iRfcb) (Torstensson 2024).
+
+NOTE: If you want a general README files included in the MANIFEST.txt, add it before running the create_manifest chunk.
+
+## Setup
+
+```{r setup}
+# Setting options for 'knitr' package chunks to display code in the output
+knitr::opts_chunk$set(echo = TRUE)
+
+# Start time
+knit.time <- Sys.time()
+
+# Load required libraries
+library(iRfcb)
+library(tidyverse)
+library(worrms)
+
+# Get data path to the ifcb data folder and your e-mail address defined in the projects .Renviron
+# Edit the .Renviron by usethis::edit_r_environ("project")
+ifcb_path <- Sys.getenv("ifcb_path")
+email_address <- Sys.getenv("email_address")
+```
+
+## Define Paths
+Here, we define the file paths needed for exporting the labelled images. These paths include directories for storing MATLAB manual and raw IFCB data for each specified classifier.
+
+```{r define_paths}
+# Define stable paths
+features_folder <- file.path(ifcb_path, "features")
+data_folder <- file.path(ifcb_path, "data")
+matlab_readme_file <- file.path("templates", "MATLAB-template.md")
+
+# Initialize vectors to store paths for each year
+manual_folders <- c()
+png_folders <- c()
+class2use_files <- c()
+readme_files <- c()
+
+# Loop through each classifier in params$classifier
+for (classifier in params$classifier) {
+  
+  # Define paths for feature and HDR data
+  class2use_file <- file.path(ifcb_path, "config", paste0("class2use_", classifier, ".mat"))
+  readme_file <- file.path("templates", paste0("README_", classifier, "-template.md"))
+  manual_folder <- file.path(ifcb_path, "manual", classifier)
+  png_folder <- file.path(ifcb_path, "png_images", enc2utf8(classifier), Sys.Date())
+  
+  if (!dir.exists(png_folder)) {
+    dir.create(png_folder, recursive = TRUE)
+  }
+  
+  # Append to lists
+  manual_folders <- c(manual_folders, manual_folder)
+  class2use_files <- c(class2use_files, class2use_file)
+  png_folders <- c(png_folders, png_folder)
+  readme_files <- c(readme_files, readme_file)
+}
+
+# Define results folders
+output_folder <- file.path(ifcb_path, "figshare", paste0("v", params$version))
+```
+
+## Extract PNG Images
+Here all annotated images are extracted as .png images. The packaging of .pngs to the iRfcb archive is skipped.
+
+```{r extract_pngs, warning=FALSE}
+# Start time
+start.time <- Sys.time()
+
+# Extract pngs for each classifier in params$classifier
+for (classifier in seq_along(params$classifier[!grepl("iRfcb", params$classifier)])) {
+  
+  ifcb_extract_annotated_images(manual_folders[classifier],
+                                class2use_files[classifier],
+                                data_folder,
+                                iconv(png_folders[classifier], from = "UTF-8", to = "latin1"),
+                                skip_class = "unclassified",
+                                verbose = FALSE)
+}
+
+# End time
+end.time <- Sys.time()
+runtime_extraction <- round(end.time - start.time, 2)
+```
+
+## Zip PNG Images
+Here all the .png images are packaged in zip-archives. The packaging of .pngs to the iRfcb archive is skipped.
+
+```{r zip_png}
+# Start time
+start.time <- Sys.time()
+
+# Zip pngs for each classifier in params$classifier
+for (classifier in seq_along(params$classifier[!grepl("iRfcb", params$classifier)])) {
+  
+  ifcb_zip_pngs(png_folder = png_folders[classifier],
+                zip_filename = file.path(output_folder, paste0("smhi_ifcb_", tolower(params$classifier[classifier]), "_annotated_images.zip")),
+                readme_file = readme_files[classifier],
+                email_address = email_address,
+                version = params$version,
+                print_progress = TRUE)
+  
+}
+
+# End time
+end.time <- Sys.time()
+runtime_zip_png <- round(end.time - start.time, 2)
+```
+
+## Zip MATLAB Files
+Here all the MATLAB and raw data files are packaged in zip-archives
+
+```{r zip_matlab, echo=FALSE, warning=FALSE}
+# Start time
+start.time <- Sys.time()
+
+# Zip MATLAB files for each classifier in params$classifier
+for (classifier in seq_along(params$classifier)) {
+  
+  ifcb_zip_matlab(manual_folder = manual_folders[classifier],
+                  features_folder = features_folder,
+                  class2use_file = class2use_files[classifier],
+                  zip_filename = file.path(output_folder, paste0("smhi_ifcb_", tolower(params$classifier[classifier]), "_matlab_files.zip")),
+                  data_folder = data_folder,
+                  readme_file = readme_files[classifier],
+                  matlab_readme_file = matlab_readme_file,
+                  email_address = email_address,
+                  version = params$version,
+                  print_progress = TRUE)
+  
+}
+
+# End time
+end.time <- Sys.time()
+runtime_zip_matlab <- round(end.time - start.time, 2)
+runtime_knit <- round(end.time - knit.time, 2)
+```
+
+## Update README
+This sections reads a README template, counts annotations, updates the README contents and writes README.md to the output folder.
+
+```{r update_readme}
+# Read the template README.md content
+readme_content <- readLines("templates/README.md", encoding = "UTF-8")
+
+readme_df <- data.frame()
+
+for (classifier in seq_along(params$classifier)) {
+  
+  # Count images
+  counts <- ifcb_count_mat_annotations(manual_folders[classifier],
+                                   class2use_files[classifier],
+                                   skip_class = "unclassified")
+  
+  # List all .mat files in the specified folder (excluding subfolders)
+  mat_files <- list.files(manual_folders[classifier], pattern = "\\.mat$", full.names = TRUE, recursive = FALSE)
+  
+  # Extract dates from file paths and get the years
+  dates <- str_extract(mat_files, "D\\d{8}")
+  years <- as.integer(substr(dates, 2, 5))
+  
+  # Find the minimum and maximum year
+  min_year <- min(years, na.rm = TRUE)
+  max_year <- max(years, na.rm = TRUE)
+  
+  df <- data.frame(classes = nrow(counts),
+                   images = sum(counts$n),
+                   min_year = min_year,
+                   max_year = max_year,
+                   classifier = params$classifier[classifier])
+  
+  readme_df <- rbind(df, readme_df)
+}
+
+# Extract relevant values from the dataframe for each classifier
+baltic <- readme_df[readme_df$classifier == "Baltic", ]
+sk <- readme_df[readme_df$classifier == "Skagerrak-Kattegat", ]
+tangesund <- readme_df[readme_df$classifier == "Tångesund", ]
+irfcb <- readme_df[readme_df$classifier == "iRfcb", ]
+
+# Update the README.md template placeholders
+updated_readme <- gsub("<DATE>", Sys.Date(), readme_content)
+updated_readme <- gsub("<VERSION>", params$version, updated_readme)
+updated_readme <- gsub("<E-MAIL>", email_address, updated_readme)
+updated_readme <- gsub("<YEAR>", year(Sys.Date()), updated_readme)
+
+# Replace Baltic values
+updated_readme <- gsub("<YEAR_START_BALTIC>", baltic$min_year, updated_readme)
+updated_readme <- gsub("<YEAR_END_BALTIC>", baltic$max_year, updated_readme)
+updated_readme <- gsub("<N_IMAGES_BALTIC>", formatC(baltic$images, format = "d", big.mark = ","), updated_readme)
+updated_readme <- gsub("<CLASSES_BALTIC>", baltic$classes, updated_readme)
+
+# Replace Skagerrak-Kattegat values
+updated_readme <- gsub("<YEAR_START_SK>", sk$min_year, updated_readme)
+updated_readme <- gsub("<YEAR_END_SK>", sk$max_year, updated_readme)
+updated_readme <- gsub("<N_IMAGES_SK>", formatC(sk$images, format = "d", big.mark = ","), updated_readme)
+updated_readme <- gsub("<CLASSES_SK>", sk$classes, updated_readme)
+
+# Replace Tångesund values
+updated_readme <- gsub("<YEAR_START_TANGESUND>", tangesund$min_year, updated_readme)
+updated_readme <- gsub("<YEAR_END_TANGESUND>", tangesund$max_year, updated_readme)
+updated_readme <- gsub("<N_IMAGES_TANGESUND>", formatC(tangesund$images, format = "d", big.mark = ","), updated_readme)
+updated_readme <- gsub("<CLASSES_TANGESUND>", tangesund$classes, updated_readme)
+
+# Write the updated content back to the README.md file
+writeLines(updated_readme, file.path(output_folder, "README.md"), useBytes = TRUE)
+```
+
+
+## Create MANIFEST
+This section creates the MANIFEST.txt for the entire output folder. Make sure to add a general README file to the output folder before executing this chunk, to have it included in the MANIFEST.
+
+```{r create_manifest}
+ifcb_create_manifest(output_folder)
+```
+
+## Summarize Runtimes
+This section provides a summary of the time taken to run various parts of the script. This helps in identifying the computational efficiency of the pipeline.
+
+```{r runtime_summary}
+runtime_variables <- c("running the whole script",
+                       "extracting PNG images",
+                       "zipping PNG files",
+                       "zipping MATLAB files")
+
+runtime_values <- c(runtime_knit, runtime_extraction, runtime_zip_png, runtime_zip_matlab)
+
+for (i in seq_along(runtime_variables)) {
+  cat("Time taken for ", runtime_variables[i], ": ", round(runtime_values[i]/3600, 2), "h", "\n", sep = "")
+}
+```
+
+
+## Reproducibility
+To ensure that the results can be reproduced in the future, this section records the session information, including the date and time when the script was run and details about the R environment used. This information is crucial for validating and reproducing the analysis.
+
+```{r reproducibility}
+# Date time
+cat("Time started:", format(knit.time), "\n")
+cat("Time finished:", format(Sys.time()), "\n")
+
+# Here we store the session info for this script
+sessioninfo::session_info()
+```
+
+## References
+- Sosik, H. M. and Olson, R. J. (2007), Automated taxonomic classification of phytoplankton sampled with imaging-in-flow cytometry. Limnol. Oceanogr: Methods 5, 204-216.
+- Torstensson (2024). I 'R' FlowCytobot (iRfcb): Tools for Analyzing and Processing Data from the IFCB. R package version 0.3.7. https://doi.org/10.5281/zenodo.12533225
+- Torstensson, Anders; Skjevik, Ann-Turi; Mohlin, Malin; Karlberg, Maria; Karlson, Bengt (2024). SMHI IFCB plankton image reference library. SciLifeLab. Dataset. doi:10.17044/scilifelab.25883455
+
+```{r citation, echo=FALSE}
+citation(package = "iRfcb")
+```

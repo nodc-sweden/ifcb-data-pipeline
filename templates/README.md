@@ -1,0 +1,140 @@
+## General information
+
+- Author: Anders Torstensson, Ann-Turi Skjevik, Malin Mohlin, Maria Karlberg, Bengt Karlson
+- Contact e-mail: <E-MAIL>
+- DOI: 10.17044/scilifelab.25883455
+- License: CC BY 4.0
+- Version: <VERSION>
+- This readme file was last updated: <DATE>
+
+Please cite as: Torstensson, Anders; Skjevik, Ann-Turi; Mohlin, Malin; Karlberg, Maria; Karlson, Bengt (<YEAR>). SMHI IFCB plankton image reference library. SciLifeLab. Dataset. https://doi.org/10.17044/scilifelab.25883455.v<VERSION>
+
+## Dataset description
+
+This repository includes four datasets of manually annotated plankton images by phytoplankton experts at the Swedish Meteorological and Hydrological Institute (SMHI). These images can be used for training classifiers to identify various plankton species. The images were captured using an Imaging FlowCytobot (IFCB, McLane Research Laboratories) from different locations and seasons in the Skagerrak, Kattegat, and Baltic Proper. The specifics of the three datasets are as follows:
+
+1. ***smhi_ifcb_svea_baltic_proper***: Images were gathered during monthly monitoring cruises from <YEAR_START_BALTIC> to <YEAR_END_BALTIC>, utilizing an IFCB mounted as part of the underway FerryBox system on the R/V Svea. This collection consists of <N_IMAGES_BALTIC> annotated images across <CLASSES_BALTIC> different classes.
+2. ***smhi_ifcb_svea_skagerrak_kattegat***: Images were collected during regular monitoring cruises from <YEAR_START_SK> to <YEAR_END_BALTIC>. This archive comprises of <N_IMAGES_SK> annotated images from <CLASSES_SK> distinct classes.
+3. ***smhi_ifcb_tångesund***: In 2016, the IFCB was deployed in situ at depths between 3 and 18 meters, near a mussel farm in Tångesund, Mollösund (Skagerrak). This dataset contains <N_IMAGES_TANGESUND> annotated images from <CLASSES_TANGESUND> different classes.
+4. ***smhi_ifcb_iRfcb*** This subset of the smhi_ifcb_svea_skagerrak_kattegat dataset can be used as test data for the iRfcb R package. You can find more information about the package and its capabilities at https://europeanifcbgroup.github.io/iRfcb/.
+
+Datasets 1-3 comprises two zip archives: one (annotated_images) containing .png images organized into subfolders for each class, and another (matlab_files) including raw data files (.roi, .hdr, .adc) and .mat-files for developing a random forest image classifier using the MATLAB code available at https://github.com/hsosik/ifcb-analysis. Dataset 4 only comprise of a MATLAB data package.
+
+The images in this dataset undergo continuous quality control, and new images are regularly added. Consequently, this dataset will be updated on a regular basis.
+
+## MATLAB data package description
+
+### Raw data files (/data)
+
+These are raw IFCB data files from manually classified samples. The filenames indicate the date and time (in UTC) of sample collection, as well as the IFCB serial number used.
+
+- data/YEAR/DATE/*.roi: raw image data stored as a binary stream
+- data/YEAR/DATE/*.adc: analog-to-digital converter data from sensors for each event, and location pointers for each event's image data. See listed headers description below, and in the .hdr file
+- data/YEAR/DATE/*.hdr: instrument settings information similar to those contained in the configuration file, as well as a key to the format of the .adc file. GPS position is also provided in the .hdr file
+
+#### Analog-to-digital converter data file headers (*.adc)
+
+1. trigger#: Trigger number of the acquired data in sequence.
+2. ADC_time: Elapsed time (in seconds) from the start of the sample run to the current trigger
+3. PMTA: Integrated output (in volts) of PMTA for the current trigger pulse
+4. PMTB: Integrated output (in volts) of PMTB for the current trigger pulse
+5. PMTC: Integrated output (in volts) of PMTC for the current trigger pulse
+6. PMTD: Integrated output (in volts) of PMTD for the current trigger pulse
+7. peakA: Peak output (in volts) of PMTA for the current trigger pulse
+8. peakB: Peak output (in volts) of PMTB for the current trigger pulse
+9. peakC: Peak output (in volts) of PMTC for the current trigger pulse
+10. peakD: Peak output (in volts) of PMTD for the current trigger pulse
+11. time of flight: Duration (in us) of the entire pulse for which a trigger signal is generated. (Note that this includes pulse stretching as set by user in the expert tab)
+12. grabtimestart: Elapsed time (in seconds) from the start of the sample run to the current trigger. (Note that this is redundant with ADC_time)
+13. grabtimeend: Elapsed time (in seconds) from the start of the sample run to the completion of image acquisition for the current trigger
+14. ROIx: 'x' position (in pixels) of the upper left corner of the bounding box for the current image
+15. ROIy: 'y' position (in pixels) of the upper left corner of the bounding box for the current image
+16. ROIwidth: Width (in pixels) of the bounding box for the current image
+17. ROIheight: Height (in pixels) of the bounding box for the current image
+18. start_byte: Integer value for the offset in the ROI array for the current image
+19. comparator_out: Placeholder for old revision hardware, reports '999' as default
+20. STartPoint: Placeholder for old revision hardware, reports '0' as default
+21. SignalLength: Placeholder for old revision hardware, reports '0' as default
+22. status: Status flag for the state of the ROI array
+23. runtime: Accumulated time (in seconds) for which sample has been analyzed
+24. inhibitTime: Accumulated time (in seconds) for which sample has not been analyzed (i.e., time during which sample was flowing but the system was busy and not looking for triggers)
+
+### MATLAB files
+
+The images were manually classified according to https://github.com/hsosik/ifcb-analysis/wiki/Instructions-for-manual-annotation-of-images, and the files generated by this code are provided in this data package.
+
+#### config/class2use.mat
+
+This file contains:
+
+- class2use: list of all classes used for manual image classification. The classes are sorted by manual classification id.
+
+#### manual/*.mat
+
+These files contain the following information:
+
+- class2use_auto: list of all classes from automatic image classification
+- class2use_manual: list of all manual classes from config/class2use.mat. The classes are sorted by manual classification id.
+- classlist: matrix containing information on roi number, manual classification id and automatic classification (see list_titles)
+- default_class_original: default manual class
+- list_titles: titles of classlist
+
+#### v2 Feature File Content Description (features/YEAR/*.csv)
+
+Features were extracted using the code in https://github.com/hsosik/ifcb-analysis, and the feature-file headers are described below (Fea v2 label: Description (Units)):
+
+- roi_number: Region of interest (ROI) number (NA)
+- Area: Cross-sectional area of largest blob in ROI (squared pixels)
+- Biovolume: Volume estimate for the largest blob (cubed pixels)
+- BoundingBox_xwidth: Width of smallest rectangle containing largest blob along x-axis (pixels)
+- BoundingBox_ywidth: Height of smallest rectangle containing largest blob along y-axis (pixels)
+- ConvexArea: Area of smallest convex polygon containing largest blob (squared pixels)
+- ConvexPerimeter: Perimeter of smallest convex polygon containing largest blob (pixels)
+- Eccentricity: Eccentricity of ellipse with same second-moments as largest blob (0=circle, 1=line) (dimensionless)
+- EquivDiameter: Diameter of circle with same area as largest blob (pixels)
+- Extent: Area divided by area of bounding box (dimensionless)
+- FeretDiameter: INCORRECT in v2; maximum distance between any two boundary points of largest blob (pixels)
+- H180: Hausdorff distance between largest blob and itself after 180-degree rotation along major axis (pixels)
+- H90: Hausdorff distance between largest blob and itself after 90-degree rotation along major axis (pixels)
+- Hflip: Hausdorff distance between largest blob and itself after reflection across major axis (pixels)
+- MajorAxisLength: Length of major axis of ellipse with same normalized second central moment as region (pixels)
+- MinorAxisLength: Length of minor axis of ellipse with same normalized second central moment as region (pixels)
+- Orientation: Angle between x-axis and major axis of ellipse with same second-moments as blob (degrees)
+- Perimeter: Distance around boundary of largest blob (pixels)
+- RWcenter2total_powerratio: Relative power in central radial wedge (NA)
+- RWhalfpowerintegral: Integral of power in half radial wedge (NA)
+- Solidity: Proportion of pixels in convex hull also in largest blob (Area/ConvexArea) (dimensionless)
+- moment_invariant1 to moment_invariant7: First to seventh moment invariant for shape indication (NA)
+- numBlobs: Number of separate connected blobs in ROI (NA)
+- shapehist_kurtosis_normEqD: Kurtosis of shape histogram (NA)
+- shapehist_mean_normEqD: Mean of shape histogram (NA)
+- shapehist_median_normEqD: Median of shape histogram (NA)
+- shapehist_mode_normEqD: Mode of shape histogram (NA)
+- shapehist_skewness_normEqD: Skewness of shape histogram (NA)
+- summedArea: Area summed for all blobs (squared pixels)
+- summedBiovolume: Biovolume summed for all blobs (cubed pixels)
+- summedConvexArea: ConvexArea summed for all blobs (squared pixels)
+- summedConvexPerimeter: ConvexPerimeter summed for all blobs (pixels)
+- summedFeretDiameter: INCORRECT in v2; FeretDiameter summed for all blobs (pixels)
+- summedMajorAxisLength: MajorAxisLength summed for all blobs (pixels)
+- summedMinorAxisLength: MinorAxisLength summed for all blobs (pixels)
+- summedPerimeter: Perimeter summed for all blobs (pixels)
+- texture_average_contrast: Average contrast of pixel gray levels inside blob after brightness adjustment (NA)
+- texture_average_gray_level: Average gray level of pixels inside blob after brightness adjustment (NA)
+- texture_entropy: Entropy of pixel gray levels inside blob after brightness adjustment (NA)
+- texture_smoothness: Smoothness measure of pixel gray levels inside blob after brightness adjustment (NA)
+- texture_third_moment: Normalized third moment pixel gray levels inside blob after brightness adjustment (NA)
+- texture_uniformity: Uniformity measure of pixel gray levels inside blob after brightness adjustment (NA)
+- RotatedArea: Area of largest blob after rotation to align major axis along x-axis (squared pixels)
+- RotatedBoundingBox_xwidth: Width of smallest rectangle containing largest blob after rotation (pixels)
+- RotatedBoundingBox_ywidth: Height of smallest rectangle containing largest blob after rotation (pixels)
+- Wedge01 to Wedge48: Relative power in sequential radial wedges in frequency space (dimensionless)
+- Ring01 to Ring50: Relative power in sequential concentric rings in frequency space (dimensionless)
+- HOG01 to HOG81: Sequential elements of Histogram of Oriented Gradients for ROI (NA)
+- Area_over_PerimeterSquared: Area divided by squared Perimeter (NA)
+- Area_over_Perimeter: Area divided by Perimeter (NA)
+- H90_over_Hflip: H90 divided by Hflip (NA)
+- H90_over_H180: H90 divided by H180 (NA)
+- Hflip_over_H180: Hflip divided by H180 (NA)
+- summedConvexPerimeter_over_Perimeter: summedConvexPerimeter divided by Perimeter (NA)
+- rotated_BoundingBox_solidity: solidity of the bounding box for the blob after rotation to horizontally align the major axis (NA)
