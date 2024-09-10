@@ -12,7 +12,7 @@ knit: (function(inputFile, encoding) {
                         output_file=paste0("output/html_reports/ifcb_image_export_report_",
                         format(Sys.time(), "D%Y%m%dT%H%M"),
                         ".html")) })
-title: "`r paste('ifcb-image-export-pipeline:', params$classifier, 'classifiers')`"
+title: "`r paste('ifcb-image-export-pipeline: version', params$version)`"
 ---
 
 ## Introduction
@@ -113,13 +113,19 @@ start.time <- Sys.time()
 # Zip pngs for each classifier in params$classifier
 for (classifier in seq_along(params$classifier[!grepl("iRfcb", params$classifier)])) {
   
+  zip_filename <- file.path(output_folder, 
+                            paste0("smhi_ifcb_", 
+                                   tolower(params$classifier[classifier]),
+                                   "_annotated_images.zip"))
+  
   ifcb_zip_pngs(png_folder = png_folders[classifier],
-                zip_filename = file.path(output_folder, paste0("smhi_ifcb_", tolower(params$classifier[classifier]), "_annotated_images.zip")),
+                zip_filename = zip_filename,
                 readme_file = readme_files[classifier],
                 email_address = email_address,
                 version = params$version,
-                print_progress = TRUE)
+                print_progress = FALSE)
   
+  cat("Zipfile created:", zip_filename)
 }
 
 # End time
@@ -137,17 +143,25 @@ start.time <- Sys.time()
 # Zip MATLAB files for each classifier in params$classifier
 for (classifier in seq_along(params$classifier)) {
   
+  zip_filename <- file.path(output_folder, 
+                            paste0("smhi_ifcb_", 
+                                   tolower(params$classifier[classifier]), 
+                                   "_matlab_files.zip"))
+  
+  zip_filename <- gsub("irfcb", "iRfcb", zip_filename)
+  
   ifcb_zip_matlab(manual_folder = manual_folders[classifier],
                   features_folder = features_folder,
                   class2use_file = class2use_files[classifier],
-                  zip_filename = file.path(output_folder, paste0("smhi_ifcb_", tolower(params$classifier[classifier]), "_matlab_files.zip")),
+                  zip_filename = zip_filename,
                   data_folder = data_folder,
                   readme_file = readme_files[classifier],
                   matlab_readme_file = matlab_readme_file,
                   email_address = email_address,
                   version = params$version,
-                  print_progress = TRUE)
+                  print_progress = FALSE)
   
+  cat("Zipfile created:", zip_filename)
 }
 
 # End time
