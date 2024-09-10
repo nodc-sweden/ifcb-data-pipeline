@@ -1,4 +1,5 @@
 ifcb_path = "path/to/ifcb/data/folder/"
 ferrybox_path = "path/to/ferrybox/data/folder/"
+email_address = "name@mail.com"
 tlc_path = "C:/Program Files/Python312/tcl/tcl8.6"
 tk_path = "C:/Program Files/Python312/tcl/tk8.6"
