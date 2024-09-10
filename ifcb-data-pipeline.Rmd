@@ -759,27 +759,12 @@ for (i in seq_along(params$year)) {
   # Remove any whitespace
   taxa_names_clean <- trimws(taxa_names_clean)
 
-  # Initialize variables
-  worms_records <- NULL
-  attempt <- 1
-  
   # Retrieve worms records with retry mechanism
-  while(attempt <= 5) {
-    tryCatch({
-      worms_records <- wm_records_names(taxa_names_clean, marine_only = FALSE)
-      if (!is.null(worms_records)) break  # Exit the loop if successful
-    }, error = function(err) {
-      if (attempt == max_retries) {
-        stop("Error occurred while retrieving worms records after ", max_retries, " attempts: ", conditionMessage(err))
-      } else {
-        message("Attempt ", attempt, " failed: ", conditionMessage(err), " - Retrying...")
-        Sys.sleep(60)  # Pause for 60 s before retrying
-      }
-    })
+  worms_records <- iRfcb:::retrieve_worms_records(taxa_names_clean,
+                                                  max_retries = 5,
+                                                  sleep_time = 60,
+                                                  marine_only = FALSE)
 
-    attempt <- attempt + 1
-  }
-  
   # Extract Aphia IDs and class names from WoRMS
   aphia_id <- sapply(worms_records, iRfcb:::extract_aphia_id)
   classes <- sapply(worms_records, iRfcb:::extract_class)
