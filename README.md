@@ -113,5 +113,5 @@ This project is licensed under the MIT License - see the [LICENSE](LICENSE) file
 
 ## References
 - Sosik, H.M., & Olson, R.J. (2007). Automated submersible flow cytometer for imaging phytoplankton. *Limnology and Oceanography: Methods*.
-- Torstensson (2024). I 'R' FlowCytobot (iRfcb): Tools for Analyzing and Processing Data from the IFCB. R package version 0.3.7. https://doi.org/10.5281/zenodo.12533225
+- Torstensson (2024). I 'R' FlowCytobot (iRfcb): Tools for Analyzing and Processing Data from the IFCB. R package version 0.3.9. https://doi.org/10.5281/zenodo.12533225
 - Torstensson, Anders; Skjevik, Ann-Turi; Mohlin, Malin; Karlberg, Maria; Karlson, Bengt (2024). SMHI IFCB plankton image reference library. SciLifeLab. Dataset. doi:10.17044/scilifelab.25883455
