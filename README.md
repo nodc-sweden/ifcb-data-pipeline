@@ -15,6 +15,37 @@ This repository contains the SMHI IFCB Data Pipeline, an R-based tool for proces
 - **`data/`**: Folder to store input data files.
 - **`output/`**: Folder to store out data files, including HTML reports.
 
+### IFCB Data Folder Structure
+The IFCB data folder, containing results processed by the `ifcb-analysis` MATLAB package, is linked within the R environment (see [Step 4](#step-4) of [Installation and Setup](#installation-and-setup)). This recommended folder structure is fully compatible with the data pipeline, ensuring seamless integration and efficient data management.
+```
+├── classified/
+│   ├── classifier_name/
+│   │   ├── classYYYY_vX/
+│   │   │   └── *.mat        # Classified data files for a specific classifier and version
+│
+├── config/
+│   └── class2use_classifier_name.mat   # Configuration file mapping classes to classifier names
+│
+├── data/
+│   ├── YYYY/               # Yearly data directory
+│   │   ├── DYYYYMMDDD/     # Subdirectory for each day of the year
+│   │   │   ├── *.hdr       # Header files containing metadata for raw data
+│   │   │   ├── *.roi       # Region of interest files
+│   │   │   └── *.adc       # ADC files with ancillary data for each sample
+│
+├── features/
+│   └── YYYY/               # Feature files directory for each year
+│       └── *.csv           # CSV files containing extracted features
+│
+├── manual/
+│   ├── classifier_name/    # Directory for manually classified data
+│   │   ├── *.mat           # Manual classification files
+│   │   └── summary/        # Summary files for manual classification
+│   │       ├── classifier_name.mat     # MATLAB Random Forest results file
+│   │       ├── classifier_name.csv     # CSV file with class scores from OOB analysis (no threshold)
+│   │       └── classifier_name_opt.csv # CSV file with class scores from OOB analysis (opt threshold)
+```
+
 ## Installation and Setup
 
 1. **Clone the repository**:  
@@ -37,7 +68,7 @@ This repository contains the SMHI IFCB Data Pipeline, an R-based tool for proces
    devtools::install_github("EuropeanIFCBGroup/iRfcb", dependencies = TRUE)
    ```
    
-4. **Edit environmental variables**:  
+4. <a name="step-4"></a> **Edit environmental variables**:  
    Open the project and set your paths as .Renviron variables:
    ```r
    # Copy template
