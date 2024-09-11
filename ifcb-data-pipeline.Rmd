@@ -1135,7 +1135,7 @@ for (i in seq_along(params$year)) {
                          "https://github.com/kudelalab/PSD",
                          "https://github.com/EuropeanIFCBGroup/iRfcb",
                          sep = ", "), # METHOD
-           TRAINING_SET_ANNOTATED_BY = "Ann-Turi Skjevik",
+           TRAINING_SET_ANNOTATED_BY = ifelse(params$classifier == "Tångesund", "Malin Mohlin", "Ann-Turi Skjevik"),
            TRAINING_SET = "https://doi.org/10.17044/scilifelab.25883455.v3",
            CLASSIFIER_CREATED_BY = data_aggregated_year$classifier_created_by,
            CLASSIFIER_USED = basename(gsub("\\\\", "/", iconv(data_aggregated_year$classifier, from = "Windows-1252", to = "UTF-8"))),
