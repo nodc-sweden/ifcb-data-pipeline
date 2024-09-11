@@ -747,6 +747,9 @@ for (i in seq_along(params$year)) {
   taxa_names_clean <- gsub(" group", "", taxa_names_clean)
   taxa_names_clean <- gsub("  ", " ", taxa_names_clean)
   
+  # Turn f to f. for forma
+  taxa_names_clean <- gsub("\\bf\\b", "f.", taxa_names_clean)
+  
   # Add "/" for multiple names with capital letters
   # e.g. Snowella_Woronichinia to Snowella/Woronichinia
   taxa_names_clean <- gsub(" ([A-Z])", "/\\1", taxa_names_clean)
