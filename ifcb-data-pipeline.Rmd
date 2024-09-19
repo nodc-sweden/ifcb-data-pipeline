@@ -848,9 +848,11 @@ for (i in seq_along(params$year)) {
     left_join(class_names, by = "class") %>%
     left_join(analysis_date, by = "sample") %>%
     left_join(cruise_numbers, by = "sample") %>%
-    mutate(verification = NA,
+    mutate(platform = "IFCB",
+           verification = NA,
            classifier_created_by = "Anders Torstensson",
-           classifier_used = paste0("SMHI-", params$classifier, " v.", max_versions[[i]]))
+           classifier_used = paste0("SMHI-", params$classifier, " v.", max_versions[[i]]),
+           metoa = "IMA-SW")
 
   # Perform multiple joins to combine manual data from multiple sources for the current year
   data_manual <- manual_data %>%
@@ -864,9 +866,11 @@ for (i in seq_along(params$year)) {
     left_join(manual_analysis_dates, by = "sample") %>%
     left_join(cruise_numbers, by = "sample") %>%
     select(-precision, -detection_probability, -miss_probability, -f1) %>%
-    mutate(verification = "ValidatedByHuman",
+    mutate(platform = "IFCB",
+           verification = "ValidatedByHuman",
            classifier_created_by = NA,
-           classifier_used = NA)
+           classifier_used = NA,
+           metoa = "IMA")
   
   # Combine human verified data (manual annotations) with automatic classification
   data_aggregated <- bind_rows(data, data_manual)
@@ -1038,15 +1042,26 @@ for (i in seq_along(params$year)) {
     all(is.na(x))
   }
   
-  # Extract unclassified data and ferrybox data
+  # Extract unclassified data
   unclassified <- data_aggregated_year %>%
     filter(class_clean == "unclassified") %>%
-    select(-worms_class, -class_clean, -aphia_id, -sflag, -trophic_type, -is_diatom, -biovolume_mm3, -carbon_ug, 
-           -class, -precision, -detection_probability, -miss_probability, -f1, -carbon_ug_per_liter) %>%
+    select(sample, classifier, counts, ml_analyzed, counts_per_liter, biovolume_mm3_per_liter, depth, timestamp,
+           date, year, month, day, time, ifcb_number, platform, flag, gpsLatitude, gpsLongitude, near_land, in_baltic, 
+           basin, analysis_date, cruise_number, verification,
+           classifier_created_by, classifier_used, metoa) %>%
     rename(unclassified_counts = counts,
            unclassified_abundance = counts_per_liter,
-           unclassified_volume = biovolume_mm3_per_liter,
-           ph = `70`,
+           unclassified_volume = biovolume_mm3_per_liter)
+  
+  # Extract ferrybox data
+  ferrybox <- data_aggregated_year %>%
+    select(-worms_class, -class_clean, -aphia_id, -sflag, -trophic_type, -is_diatom, -biovolume_mm3,
+           -carbon_ug, -metoa, -class, -precision, -detection_probability, -miss_probability, -f1, 
+           -carbon_ug_per_liter, -counts, -counts_per_liter, -biovolume_mm3_per_liter, -ml_analyzed, 
+           -flag, -analysis_date, -verification, -platform, -classifier_created_by, -classifier_used, -classifier) %>%
+    mutate(platform = "SveaFB",
+           analysis_date = date) %>%
+    rename(ph = `70`,
            chl = `8063`,
            cdom = `8165`,
            pc = `8173`,
@@ -1058,19 +1073,22 @@ for (i in seq_along(params$year)) {
            salinity = `8181`,
            oxygen_saturation = `8190`,
            oxygen_ml_l = `8191`) %>%
-  mutate(across(all_of(intersect(c("ph", "chl", "cdom", "pc", "pe", 
-                                   "waterflow", "turb", "pco2", "oxygen_saturation"), 
-                                 names(.)[!sapply(., is_all_na)])),
-                ~ na_if(.x, -999))) %>% # Replace -999 values with NA
-  mutate(across(all_of(intersect(c("ph", "pco2"), 
-                                 names(.)[!sapply(., is_all_na)])),
-                ~ na_if(.x, 0))) # Replace 0 values with NA
+    mutate(across(all_of(intersect(c("ph", "chl", "cdom", "pc", "pe", 
+                                     "waterflow", "turb", "pco2", "oxygen_saturation"), 
+                                   names(.)[!sapply(., is_all_na)])),
+                  ~ na_if(.x, -999))) %>% # Replace -999 values with NA
+    mutate(across(all_of(intersect(c("ph", "pco2"), 
+                                   names(.)[!sapply(., is_all_na)])),
+                  ~ na_if(.x, 0))) %>% # Replace 0 values with NA
+    distinct() %>%
+    filter(!if_all(c(ph, chl, cdom, pc, pe, waterflow, turb, pco2, 
+                     watertemp, salinity, oxygen_saturation, oxygen_ml_l), is.na))
   
   # Remove unclassified from main data frame and bind with unclassified and ferrybox data
   data_aggregated_year <- data_aggregated_year %>%
     filter(!class_clean == "unclassified") %>%
-    bind_rows(unclassified) %>%
-    arrange(desc(verification), sample, class_clean)
+    bind_rows(unclassified, ferrybox) %>%
+    arrange(verification, sample, class_clean)
   
   # Retrieve column names for Shark database integration
   shark_col <- ifcb_get_shark_colnames()
@@ -1079,7 +1097,7 @@ for (i in seq_along(params$year)) {
   shark_col[1:nrow(data_aggregated_year),] <- ""
 
   if (params$classifier == "Tångesund") {
-    station_name <- data_aggregated_year$sample
+    station_name <- "Tångesund"
     depth <- data_aggregated_year$depth
   } else {
     station_name <- paste0("RV_FB_", data_aggregated_year$sample)
@@ -1090,7 +1108,7 @@ for (i in seq_along(params$year)) {
   shark_df <- shark_col %>%
     mutate(MYEAR = data_aggregated_year$year,
            STATN = station_name,
-           SAMPLING_PLATFORM = data_aggregated_year$ifcb_number,
+           SAMPLING_PLATFORM = data_aggregated_year$platform,
            PROJ = ifelse(params$year[i] < 2025, "IFCB, DTO, JERICO", "IFCB"),
            ORDERER = "SMHI",
            SHIPC = ifelse(params$classifier == "Tångesund", NA, "77SE"),
@@ -1119,14 +1137,14 @@ for (i in seq_along(params$year)) {
            APHIA_ID = data_aggregated_year$aphia_id,
            IMAGE_VERIFICATION = data_aggregated_year$verification,
            CLASS_NAME = data_aggregated_year$class,
-           CLASS_F1 = data_aggregated_year$f1,
+           CLASS_F1 = round(data_aggregated_year$f1*100, 3), # In percent
            COUNT = data_aggregated_year$counts, # COUNTS per SAMPLE
            COEFF = round(1000/data_aggregated_year$ml_analyzed, 1),
            ABUND = round(data_aggregated_year$counts_per_liter, 1), #COUNTS PER LITER
            QFLAG = data_aggregated_year$flag,
            C_CONC = signif(data_aggregated_year$carbon_ug_per_liter, 6), # CARBON PER LITER
            BIOVOL = signif(data_aggregated_year$biovolume_mm3_per_liter, 6), # BIOVOLUME PER LITER
-           METOA = "IMA",
+           METOA = data_aggregated_year$metoa,
            COUNTPROG = paste("ifcb-analysis, iRfcb", packageVersion("iRfcb")),
            ALABO = "SMHI",
            ACKR_ANA = "N",
@@ -1139,7 +1157,7 @@ for (i in seq_along(params$year)) {
            TRAINING_SET = "https://doi.org/10.17044/scilifelab.25883455.v3",
            CLASSIFIER_CREATED_BY = data_aggregated_year$classifier_created_by,
            CLASSIFIER_USED = basename(gsub("\\\\", "/", iconv(data_aggregated_year$classifier, from = "Windows-1252", to = "UTF-8"))),
-           MANUAL_QC_DATE = Sys.Date(),
+           MANUAL_QC_DATE = as.Date(Sys.Date()),
            PRE_FILTER_SIZE ="150", # unit um
            UNCLASSIFIED_COUNTS = round(data_aggregated_year$unclassified_counts, 1),
            UNCLASSIFIED_ABUNDANCE = signif(data_aggregated_year$unclassified_abundance, 6),
@@ -1156,7 +1174,38 @@ for (i in seq_along(params$year)) {
            PSAL_FB = round(data_aggregated_year$salinity, 4),
            OSAT_FB = round(data_aggregated_year$oxygen_saturation, 4),
            DOXY_FB = round(data_aggregated_year$oxygen_ml_l, 4)
+    ) %>%
+    mutate(
+      PRE_FILTER_SIZE = ifelse(if_any(c(PH_FB, CHL_FB, CDOM_FB, PHYC_FB, PHER_FB, WATERFLOW_FB, TURB_FB,
+                                        PCO2_FB, TEMP_FB, PSAL_FB, OSAT_FB, DOXY_FB), ~ !is.na(.x)),
+                               NA, PRE_FILTER_SIZE),
+      IFCBNO = ifelse(if_any(c(PH_FB, CHL_FB, CDOM_FB, PHYC_FB, PHER_FB, WATERFLOW_FB, TURB_FB,
+                               PCO2_FB, TEMP_FB, PSAL_FB, OSAT_FB, DOXY_FB), ~ !is.na(.x)),
+                      NA, IFCBNO),
+      MANUAL_QC_DATE = ifelse(if_any(c(PH_FB, CHL_FB, CDOM_FB, PHYC_FB, PHER_FB, WATERFLOW_FB, TURB_FB,
+                                       PCO2_FB, TEMP_FB, PSAL_FB, OSAT_FB, DOXY_FB), ~ !is.na(.x)),
+                              NA, MANUAL_QC_DATE),
+      TRAINING_SET_ANNOTATED_BY = ifelse(if_any(c(PH_FB, CHL_FB, CDOM_FB, PHYC_FB, PHER_FB, WATERFLOW_FB, TURB_FB,
+                                                  PCO2_FB, TEMP_FB, PSAL_FB, OSAT_FB, DOXY_FB), ~ !is.na(.x)),
+                                         NA, TRAINING_SET_ANNOTATED_BY),
+      TRAINING_SET = ifelse(if_any(c(PH_FB, CHL_FB, CDOM_FB, PHYC_FB, PHER_FB, WATERFLOW_FB, TURB_FB,
+                                     PCO2_FB, TEMP_FB, PSAL_FB, OSAT_FB, DOXY_FB), ~ !is.na(.x)),
+                            NA, TRAINING_SET),
+      METDC = ifelse(if_any(c(PH_FB, CHL_FB, CDOM_FB, PHYC_FB, PHER_FB, WATERFLOW_FB, TURB_FB,
+                              PCO2_FB, TEMP_FB, PSAL_FB, OSAT_FB, DOXY_FB), ~ !is.na(.x)),
+                     NA, METDC),
+      COUNTPROG = ifelse(if_any(c(PH_FB, CHL_FB, CDOM_FB, PHYC_FB, PHER_FB, WATERFLOW_FB, TURB_FB,
+                                  PCO2_FB, TEMP_FB, PSAL_FB, OSAT_FB, DOXY_FB), ~ !is.na(.x)),
+                         NA, COUNTPROG),
+      METOA = ifelse(if_any(c(PH_FB, CHL_FB, CDOM_FB, PHYC_FB, PHER_FB, WATERFLOW_FB, TURB_FB,
+                              PCO2_FB, TEMP_FB, PSAL_FB, OSAT_FB, DOXY_FB), ~ !is.na(.x)),
+                     NA, METOA),
+      PDMET = ifelse(if_any(c(PH_FB, CHL_FB, CDOM_FB, PHYC_FB, PHER_FB, WATERFLOW_FB, TURB_FB,
+                              PCO2_FB, TEMP_FB, PSAL_FB, OSAT_FB, DOXY_FB), ~ !is.na(.x)),
+                     NA, PDMET),
+      MANUAL_QC_DATE = as.Date(MANUAL_QC_DATE)
     )
+    
 
   # Store shark_df for the current year in the list
   shark_dfs[[as.character(params$year[i])]] <- shark_df
@@ -1300,7 +1349,6 @@ if (params$multiyear_delivery) {
     cat("Year:", params$year[i], "- data package:", data_delivery_paths[[as.character(params$year[i])]], "\n")
   }
 }
-
 
 end.time <- Sys.time()
 runtime_knit <- round(end.time - knit.time, 2)
