@@ -2,7 +2,7 @@
 author: "Anders Torstensson"
 date: "`r Sys.Date()`"
 params: 
-  classifier: "Baltic" # "Baltic", "Skagerrak-Kattegat" or "Tångesund"
+  classifier: "Skagerrak-Kattegat" # "Baltic", "Skagerrak-Kattegat" or "Tångesund"
   year: [2022, 2023, 2024] # each year separated by comma, e.g. [2022, 2023, 2024]
   threshold: "opt" # MATLAB classifier threshold, "opt", "adhoc" or "none"
   remove_flagged_data: !r c("bubbles", "incomplete", "near land") # What flags should be used for filtering data e.g. c("bubbles", "incomplete", "near land")
@@ -151,7 +151,7 @@ for (year in params$year) {
   class_subfolders <- class_subfolders[grepl(as.character(year), class_subfolders)]
 
   # Extract the version numbers from the subfolder names
-  versions <- sub(paste0("class", year ,"_v"), "", basename(class_subfolders))
+  versions <- sub(paste0("class", year , "_", params$classifier, "_v"), "", basename(class_subfolders))
   versions <- as.numeric(versions)
 
   # Get the subfolder with the highest version number

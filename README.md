@@ -2,7 +2,7 @@
 
 ## Overview
 
-This repository contains the SMHI IFCB Data Pipelines, an R-based tool for processing and exporting manually labelled and pre-classified data from the Imaging FlowCytobot (IFCB) to [SHARK](https://sharkweb.smhi.se/) and [Figshare](https://figshare.scilifelab.se/). The data has already been classified using a Random Forest algorithm with the MATLAB package [`ifcb-analysis`](https://github.com/hsosik/ifcb-analysis) (Sosik and Olson, 2007). The pipelines focuses on subsequent steps like data cleaning, biovolume calculation, quality control, image extraction and export to the SHARK database and to the [`SMHI IFCB plankton image reference library`](https://doi.org/10.17044/scilifelab.25883455) (Torstensson et al. 2024). The pipelines relies heavily on functions from the [`iRfcb`](https://github.com/EuropeanIFCBGroup/iRfcb) R package (> v0.3.9 is required).
+This repository contains the SMHI IFCB Data Pipelines, an R-based tool for processing and exporting manually labelled and pre-classified data from the Imaging FlowCytobot (IFCB) to [SHARK](https://sharkweb.smhi.se/) and [Figshare](https://figshare.scilifelab.se/). The data has already been classified using a Random Forest algorithm with the MATLAB package [`ifcb-analysis`](https://github.com/hsosik/ifcb-analysis) (Sosik and Olson, 2007). The pipelines focuses on subsequent steps like data cleaning, biovolume calculation, quality control, image extraction and export to the SHARK database and to the [`SMHI IFCB plankton image reference library`](https://doi.org/10.17044/scilifelab.25883455) (Torstensson et al. 2024). The pipelines relies heavily on functions from the [`iRfcb`](https://github.com/EuropeanIFCBGroup/iRfcb) R package (>= v0.3.9 is required).
 
 ### Key Features
 - **Read Data**: Imports and loads manually labelled and pre-classified IFCB data, including metadata such as position, timestamp, and class scores.
@@ -24,7 +24,7 @@ The IFCB data folder, containing results processed by the `ifcb-analysis` MATLAB
 ```
 ├── classified/
 │   ├── classifier_name/
-│   │   ├── classYYYY_vX/
+│   │   ├── classYYYY_classifier_name_vX/
 │   │   │   └── *.mat        # Classified data files for a specific classifier and version
 │
 ├── config/
