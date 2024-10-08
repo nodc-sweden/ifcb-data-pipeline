@@ -2,7 +2,7 @@
 
 ## Overview
 
-This repository contains the SMHI IFCB Data Pipelines, an R-based tool for processing and exporting manually labelled and pre-classified data from the Imaging FlowCytobot (IFCB) to [SHARK](https://sharkweb.smhi.se/) and [Figshare](https://figshare.scilifelab.se/). The data has already been classified using a Random Forest algorithm with the MATLAB package [`ifcb-analysis`](https://github.com/hsosik/ifcb-analysis) (Sosik and Olson, 2007). The pipelines focuses on subsequent steps like data cleaning, biovolume calculation, quality control, image extraction and export to the SHARK database and to the [`SMHI IFCB plankton image reference library`](https://doi.org/10.17044/scilifelab.25883455) (Torstensson et al. 2024). The pipelines relies heavily on functions from the [`iRfcb`](https://github.com/EuropeanIFCBGroup/iRfcb) R package (>= v0.3.9 is required).
+This repository contains the SMHI IFCB Data Pipelines, an R-based tool for processing and exporting manually labelled and pre-classified data from the Imaging FlowCytobot (IFCB) to [SHARK](https://sharkweb.smhi.se/), [EcoTaxa](https://ecotaxa.obs-vlfr.fr/) and [Figshare](https://figshare.scilifelab.se/). The data has already been classified using a Random Forest algorithm with the MATLAB package [`ifcb-analysis`](https://github.com/hsosik/ifcb-analysis) (Sosik and Olson, 2007). The pipelines focuses on subsequent steps like data cleaning, biovolume calculation, quality control, image extraction and export to the SHARK database and to the [`SMHI IFCB plankton image reference library`](https://doi.org/10.17044/scilifelab.25883455) (Torstensson et al. 2024). The pipelines relies heavily on functions from the [`iRfcb`](https://github.com/EuropeanIFCBGroup/iRfcb) R package (>= v0.3.11 is required).
 
 ### Key Features
 - **Read Data**: Imports and loads manually labelled and pre-classified IFCB data, including metadata such as position, timestamp, and class scores.
@@ -105,7 +105,7 @@ The `ifcb-image-export-pipeline.Rmd` will proceed through the following stages:
 2. **Zip Files**: Creates zip archives containing the `.png` images, MATLAB files, and raw data.
 3. **README and Manifest Creation**: Updates README files with image counts and generates a `MANIFEST.txt` for the final output.
 
-This process currently supports multiple classifiers, such as: "Baltic", "Skagerrak-Kattegat", "Tångesund", and "iRfcb" and is essential for updating the [`SMHI IFCB plankton image reference library`](https://doi.org/10.17044/scilifelab.25883455).
+This process currently supports multiple classifiers, such as: "Baltic", "Skagerrak-Kattegat", "Tångesund", and "iRfcb" and is essential for updating the [`SMHI IFCB plankton image reference library`](https://doi.org/10.17044/scilifelab.25883455) and EcoTaxa repositories.
 
 ## License
 
@@ -113,5 +113,5 @@ This project is licensed under the MIT License - see the [LICENSE](LICENSE) file
 
 ## References
 - Sosik, H.M., & Olson, R.J. (2007). Automated submersible flow cytometer for imaging phytoplankton. *Limnology and Oceanography: Methods*.
-- Torstensson (2024). I 'R' FlowCytobot (iRfcb): Tools for Analyzing and Processing Data from the IFCB. R package version 0.3.9. https://doi.org/10.5281/zenodo.12533225
+- Torstensson (2024). I 'R' FlowCytobot (iRfcb): Tools for Analyzing and Processing Data from the IFCB. R package version 0.3.11. https://doi.org/10.5281/zenodo.12533225
 - Torstensson, Anders; Skjevik, Ann-Turi; Mohlin, Malin; Karlberg, Maria; Karlson, Bengt (2024). SMHI IFCB plankton image reference library. SciLifeLab. Dataset. doi:10.17044/scilifelab.25883455
