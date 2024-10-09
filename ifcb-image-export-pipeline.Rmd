@@ -113,7 +113,7 @@ ecotaxa_folder <- file.path(ifcb_path, "reference_library", "ecotaxa", paste0("v
 ## Extract PNG Images
 Here all annotated images are extracted as .png images. The extraction of .pngs to the iRfcb archive is skipped.
 
-```{r extract_pngs, warning=FALSE}
+```{r extract_pngs, warning=FALSE, results='asis'}
 # Start time
 start.time <- Sys.time()
 
@@ -129,6 +129,21 @@ for (classifier in seq_along(params$classifier[!grepl("iRfcb", params$classifier
                                 overwrite = TRUE)
   
   cat("PNG images extracted into subfolders in", png_folders[classifier], "\n")
+  
+  # Count annotations
+  image_counts <- ifcb_count_mat_annotations(manual_folders[classifier],
+                                             class2use_files[classifier],
+                                             skip_class = "unclassified")
+  
+  # Store annotations counts
+  write_tsv(image_counts, 
+            file.path("output",paste0(params$classifier[classifier], "_image_count.txt")),
+            na = NA)
+  
+  # Print annotations counts in table
+  image_counts %>%
+    arrange(desc(n)) %>%
+    knitr::kable(caption = paste("Image count per class:", params$classifier[classifier]))
 }
 
 # End time
@@ -200,6 +215,7 @@ for (classifier in seq_along(params$classifier[!grepl("iRfcb", params$classifier
     manual_analysis_dates <- rbind(manual_analysis_dates, temp)
   }
   
+  # Join metadata
   metadata <- metadata %>%
     left_join(manual_analysis_dates, by = "sample") %>%
     left_join(sample_depth, by = "sample")
@@ -396,10 +412,12 @@ for (classifier in seq_along(params$classifier[!grepl("iRfcb", params$classifier
     left_join(cruise_numbers, by = "sample")
   
   metadata <- metadata %>%
-    mutate(annotated_by = ifelse(params$classifier[!grepl("iRfcb", params$classifier)][classifier] == "Tångesund", 
+    mutate(annotated_by = ifelse(
+      params$classifier[!grepl("iRfcb", params$classifier)][classifier] == "Tångesund", 
                                  "Malin Mohlin", 
                                  "Ann-Turi Skjevik"),
-           annotated_by_email = ifelse(params$classifier[!grepl("iRfcb", params$classifier)][classifier] == "Tångesund", 
+           annotated_by_email = ifelse(
+             params$classifier[!grepl("iRfcb",params$classifier)][classifier] == "Tångesund", 
                                        mm_email, 
                                        ats_email),
            ship = ifelse(params$classifier[!grepl("iRfcb", params$classifier)][classifier] == "Tångesund", 
@@ -467,7 +485,6 @@ for (classifier in seq_along(params$classifier[!grepl("iRfcb", params$classifier
     object_depth_max = depth,
     
     ### Sample fields
-    
     sample_vessel = metadata$ship,
     sample_id = sample_name,
     sample_station = station_name,
@@ -747,7 +764,8 @@ for (classifier in seq_along(params$classifier[!grepl("iRfcb", params$classifier
   for (i in seq_along(unique(ecotaxa_metadata$object_annotation_hierarchy))) {
     
     # Define path to subfolder
-    subfolder_path <- file.path(png_folders[classifier], unique(ecotaxa_metadata$object_annotation_hierarchy)[i])
+    subfolder_path <- file.path(png_folders[classifier],
+                                unique(ecotaxa_metadata$object_annotation_hierarchy)[i])
     
     # Filter metadata for each class
     ecotaxa_metadata_ix <- ecotaxa_metadata %>%
@@ -764,7 +782,11 @@ for (classifier in seq_along(params$classifier[!grepl("iRfcb", params$classifier
     
     # Write one metadata file per class subfolder
     write_tsv(ecotaxa_metadata_ix,
-              file.path(subfolder_path, paste0("ecotaxa_", unique(iRfcb:::truncate_folder_name(ecotaxa_metadata$object_annotation_hierarchy))[i], ".tsv")),
+              file.path(
+                subfolder_path, 
+                paste0("ecotaxa_",
+                       unique(iRfcb:::truncate_folder_name(ecotaxa_metadata$object_annotation_hierarchy))[i],
+                       ".tsv")),
               na = "")
   }
   
@@ -880,7 +902,10 @@ for (classifier in seq_along(params$classifier)) {
                                    skip_class = "unclassified")
   
   # List all .mat files in the specified folder (excluding subfolders)
-  mat_files <- list.files(manual_folders[classifier], pattern = "\\.mat$", full.names = TRUE, recursive = FALSE)
+  mat_files <- list.files(manual_folders[classifier], 
+                          pattern = "\\.mat$", 
+                          full.names = TRUE, 
+                          recursive = FALSE)
   
   # Extract dates from file paths and get the years
   dates <- str_extract(mat_files, "D\\d{8}")
