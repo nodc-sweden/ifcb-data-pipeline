@@ -138,7 +138,7 @@ for (classifier in seq_along(params$classifier[!grepl("iRfcb", params$classifier
   # Store annotations counts
   write_tsv(image_counts, 
             file.path("output",paste0(params$classifier[classifier], "_image_count.txt")),
-            na = NA)
+            na = "")
   
   # Print annotations counts in table
   image_counts %>%
