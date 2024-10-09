@@ -57,3 +57,4 @@ data/shapefiles/*/
 
 # Output
 output/html_reports/*.html
+output/*.txt
