@@ -141,9 +141,9 @@ for (classifier in seq_along(params$classifier[!grepl("iRfcb", params$classifier
             na = "")
   
   # Print annotations counts in table
-  image_counts %>%
-    arrange(desc(n)) %>%
-    knitr::kable(caption = paste("Image count per class:", params$classifier[classifier]))
+  print(image_counts %>%
+          arrange(desc(n)) %>%
+          knitr::kable(caption = paste("Image count per class:", params$classifier[classifier])))
 }
 
 # End time
