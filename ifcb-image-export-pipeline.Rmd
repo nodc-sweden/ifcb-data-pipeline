@@ -2,7 +2,7 @@
 author: "Anders Torstensson"
 date: "`r Sys.Date()`"
 params: 
-  classifier: ["Baltic", "Skagerrak-Kattegat", "Tångesund", "iRfcb"] # "Baltic", "Skagerrak-Kattegat" or "Tångesund"
+  classifier: ["Baltic", "Skagerrak-Kattegat", "Tångesund", "iRfcb"] # "Baltic", "Skagerrak-Kattegat", "Tångesund", "iRfcb"
   version: 4
  
 output: html_document
@@ -44,6 +44,7 @@ ferrybox_path <- Sys.getenv("ferrybox_path")
 
 mm_email <- Sys.getenv("mm_email")
 ats_email <- Sys.getenv("ats_email")
+at_email <- Sys.getenv("email_address")
 
 # Installing the required Python dependencies in a specified virtual environment for the 'iRfcb' package
 ifcb_py_install(envname = ".virtualenvs/iRfcb")
@@ -310,6 +311,7 @@ for (classifier in seq_along(params$classifier[!grepl("iRfcb", params$classifier
   taxa_names_clean <- gsub(" coil", "", taxa_names_clean)
   taxa_names_clean <- gsub(" filament", "", taxa_names_clean)
   taxa_names_clean <- gsub(" pair", "", taxa_names_clean)
+  taxa_names_clean <- gsub(" round", "", taxa_names_clean)
   taxa_names_clean <- gsub("-like", "", taxa_names_clean)
   taxa_names_clean <- gsub(" like", "", taxa_names_clean)
   taxa_names_clean <- gsub(" bundle", "", taxa_names_clean)
@@ -429,6 +431,9 @@ for (classifier in seq_along(params$classifier[!grepl("iRfcb", params$classifier
     sample_name <- metadata$sample
     depth <- metadata$depth
     source <- "discrete depth"
+    metadata <- metadata %>%
+      mutate(annotated_by = ifelse(analysis_date > "2024-10-01", "Anders Torstensson", "Malin Mohlin"),
+             annotated_by_email = ifelse(analysis_date > "2024-10-01", at_email, mm_email))
   } else {
     station_name <- NA
     sample_name <- paste0("RV_FB_", metadata$sample)
@@ -472,8 +477,8 @@ for (classifier in seq_along(params$classifier[!grepl("iRfcb", params$classifier
     object_lon = metadata$gpsLongitude,
     object_date = format(metadata$date, "%Y%m%d"),
     object_time = gsub(":", "", metadata$time),
-    object_annotation_hierarchy = metadata$subfolder,
-    object_annotation_category = metadata$class_clean,
+    object_annotation_hierarchy = metadata$class_clean,
+    object_annotation_category = metadata$subfolder,
     object_aphiaid = metadata$aphia_id,
     object_annotation_date = format(metadata$analysis_date, "%Y%m%d"),
     object_annotation_time = gsub(":", "", metadata$analysis_time),
@@ -761,16 +766,16 @@ for (classifier in seq_along(params$classifier[!grepl("iRfcb", params$classifier
   # Get current metadata for the classifier
   ecotaxa_metadata <- ecotaxa_list[[params$classifier[classifier]]]
   
-  for (i in seq_along(unique(ecotaxa_metadata$object_annotation_hierarchy))) {
+  for (i in seq_along(unique(ecotaxa_metadata$object_annotation_category))) {
     
     # Define path to subfolder
     subfolder_path <- file.path(png_folders[classifier],
-                                unique(ecotaxa_metadata$object_annotation_hierarchy)[i])
+                                unique(ecotaxa_metadata$object_annotation_category)[i])
     
     # Filter metadata for each class
     ecotaxa_metadata_ix <- ecotaxa_metadata %>%
-      filter(object_annotation_hierarchy == unique(ecotaxa_metadata$object_annotation_hierarchy)[i]) %>%
-      mutate(object_annotation_hierarchy = iRfcb:::truncate_folder_name(object_annotation_hierarchy))
+      filter(object_annotation_category == unique(ecotaxa_metadata$object_annotation_category)[i]) %>%
+      mutate(object_annotation_category = iRfcb:::truncate_folder_name(object_annotation_category))
     
     # Add data format codes
     ecotaxa_metadata_ix <- bind_rows(
@@ -785,7 +790,7 @@ for (classifier in seq_along(params$classifier[!grepl("iRfcb", params$classifier
               file.path(
                 subfolder_path, 
                 paste0("ecotaxa_",
-                       unique(iRfcb:::truncate_folder_name(ecotaxa_metadata$object_annotation_hierarchy))[i],
+                       unique(iRfcb:::truncate_folder_name(ecotaxa_metadata$object_annotation_category))[i],
                        ".tsv")),
               na = "")
   }
@@ -937,22 +942,28 @@ updated_readme <- gsub("<E-MAIL>", email_address, updated_readme)
 updated_readme <- gsub("<YEAR>", year(Sys.Date()), updated_readme)
 
 # Replace Baltic values
-updated_readme <- gsub("<YEAR_START_BALTIC>", baltic$min_year, updated_readme)
-updated_readme <- gsub("<YEAR_END_BALTIC>", baltic$max_year, updated_readme)
-updated_readme <- gsub("<N_IMAGES_BALTIC>", formatC(baltic$images, format = "d", big.mark = ","), updated_readme)
-updated_readme <- gsub("<CLASSES_BALTIC>", baltic$classes, updated_readme)
+if ("Baltic" %in% params$classifier) {
+  updated_readme <- gsub("<YEAR_START_BALTIC>", baltic$min_year, updated_readme)
+  updated_readme <- gsub("<YEAR_END_BALTIC>", baltic$max_year, updated_readme)
+  updated_readme <- gsub("<N_IMAGES_BALTIC>", formatC(baltic$images, format = "d", big.mark = ","), updated_readme)
+  updated_readme <- gsub("<CLASSES_BALTIC>", baltic$classes, updated_readme)
+}
 
 # Replace Skagerrak-Kattegat values
-updated_readme <- gsub("<YEAR_START_SK>", sk$min_year, updated_readme)
-updated_readme <- gsub("<YEAR_END_SK>", sk$max_year, updated_readme)
-updated_readme <- gsub("<N_IMAGES_SK>", formatC(sk$images, format = "d", big.mark = ","), updated_readme)
-updated_readme <- gsub("<CLASSES_SK>", sk$classes, updated_readme)
+if ("Skagerrak-Kattegat" %in% params$classifier) {
+  updated_readme <- gsub("<YEAR_START_SK>", sk$min_year, updated_readme)
+  updated_readme <- gsub("<YEAR_END_SK>", sk$max_year, updated_readme)
+  updated_readme <- gsub("<N_IMAGES_SK>", formatC(sk$images, format = "d", big.mark = ","), updated_readme)
+  updated_readme <- gsub("<CLASSES_SK>", sk$classes, updated_readme)
+}
 
 # Replace Tångesund values
-updated_readme <- gsub("<YEAR_START_TANGESUND>", tangesund$min_year, updated_readme)
-updated_readme <- gsub("<YEAR_END_TANGESUND>", tangesund$max_year, updated_readme)
-updated_readme <- gsub("<N_IMAGES_TANGESUND>", formatC(tangesund$images, format = "d", big.mark = ","), updated_readme)
-updated_readme <- gsub("<CLASSES_TANGESUND>", tangesund$classes, updated_readme)
+if ("Tångesund" %in% params$classifier) {
+  updated_readme <- gsub("<YEAR_START_TANGESUND>", tangesund$min_year, updated_readme)
+  updated_readme <- gsub("<YEAR_END_TANGESUND>", tangesund$max_year, updated_readme)
+  updated_readme <- gsub("<N_IMAGES_TANGESUND>", formatC(tangesund$images, format = "d", big.mark = ","), updated_readme)
+  updated_readme <- gsub("<CLASSES_TANGESUND>", tangesund$classes, updated_readme)
+}
 
 # Write the updated content back to the README.md file
 writeLines(updated_readme, file.path(figshare_folder, "README.md"), useBytes = TRUE)
