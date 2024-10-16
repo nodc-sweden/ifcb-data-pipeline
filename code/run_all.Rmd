@@ -1,0 +1,58 @@
+---
+author: "Anders Torstensson"
+date: "`r Sys.Date()`"
+output: html_document
+knit: (function(inputFile, encoding) {
+  rmarkdown::render(inputFile,
+                    encoding = encoding, 
+                    output_file = paste0("output/html_reports/ifcb_data_export_report_",
+                                         format(Sys.time(), "D%Y%m%dT%H%M"),
+                                         ".html"))
+})
+title: "`r paste('ifcb-pipeline:', params$classifier, 'classifier')`"
+---
+
+## IFCB Data Pipeline Report
+
+This is a dynamically generated report based on classifier and year data passed through the `render()` function.
+
+### Classifier Information
+```{r}
+# Define default values if params object does not exist
+if (!exists("params")) {
+  params <- list(
+    classifier = "Skagerrak-Kattegat",
+    year = c(2022, 2023, 2024),
+    threshold = "opt",
+    remove_flagged_data = c("bubbles", "incomplete", "near land"),
+    regional = TRUE,
+    multiyear_delivery = TRUE,
+    f1_threshold = 0.9
+  )
+}
+
+# Print classifier and year info
+cat("Classifier: ", params$classifier, "\n")
+cat("Years: ", paste(params$year, collapse = ", "), "\n")
+cat("Threshold: ", params$threshold, "\n")
+cat("Remove flagged data: ", paste(params$remove_flagged_data, collapse = ", "), "\n")
+cat("Multiyear delivery: ", params$multiyear_delivery, "\n")
+cat("F1 Threshold: ", params$f1_threshold, "\n")
+```
+### Data Processing Summary
+
+```{r}
+# Simulate some data processing summary
+data_summary <- data.frame(
+  Year = params$year,
+  Processed_Items = sample(1000:5000, length(params$year)),
+  Flagged_Items = sample(50:300, length(params$year))
+)
+
+# Print data summary
+knitr::kable(data_summary, caption = "Summary of Processed Data")
+```
+
+### Additional Information
+
+This report was generated dynamically based on parameters passed to the document. You can adjust the parameters using the `render()` function in the R script.
