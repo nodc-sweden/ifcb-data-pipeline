@@ -2,7 +2,7 @@
 author: "Anders Torstensson"
 date: "`r Sys.Date()`"
 params: 
-  classifier: "Baltic" # "Baltic", "Skagerrak-Kattegat" or "Tangesund"
+  classifier: "Skagerrak-Kattegat" # "Baltic", "Skagerrak-Kattegat" or "Tangesund"
   year: [2022, 2023, 2024] # each year separated by comma, e.g. [2022, 2023, 2024]
   threshold: "opt" # MATLAB classifier threshold, "opt", "adhoc" or "none"
   remove_flagged_data: !r c("bubbles", "incomplete", "near land") # What flags should be used for filtering data e.g. c("bubbles", "incomplete", "near land")
@@ -204,7 +204,7 @@ blacklist_pattern <- paste(blacklist$sample, collapse = "|")
 In this step, we read the HDR data files for each year specified in the parameters. The HDR data includes sample metadata such as GPS coordinates, timestamps, and related information. We handle any missing GPS data by filling in the gaps using ferrybox positions.
 
 ```{r read_hdr_data}
-# Initialize a list to store the processed HDR data for each year
+# Initialize lists for storing the processed data across all years
 hdr_data_list <- list()
 all_hdr_data_list <- list()
 ferrbyox_data_list <- list()
@@ -213,80 +213,75 @@ ferrbyox_data_list <- list()
 start.time <- Sys.time()
 
 for (i in seq_along(params$year)) {
-
-  # Get current data folder
+  # Define paths and cache filenames for each year
+  year <- as.character(params$year[i])
   data_folder <- data_folders[[i]]
+  
+  # Cache paths specific to each year
+  cache_path_hdr <- file.path("cache", paste0("hdr_data_cache_", year, ".rds"))
+  cache_path_all_hdr <- file.path("cache", paste0("all_hdr_data_cache_", year, ".rds"))
+  cache_path_ferrybox <- file.path("cache", paste0("ferrybox_data_cache_", year, ".rds"))
 
-  # Read HDR data from the specified data folder
+  # Check if cache exists and if files in data_folder have changed
+  data_files <- list.files(data_folder, full.names = TRUE)
+  file_modified_times <- sapply(data_files, function(x) file.info(x)$mtime)
+
+  # Load cache if it exists and no files have been modified
+  if (file.exists(cache_path_hdr) && file.exists(cache_path_all_hdr) && file.exists(cache_path_ferrybox)) {
+    last_cache_time <- max(file.info(c(cache_path_hdr, cache_path_all_hdr, cache_path_ferrybox))$mtime)
+    if (all(file_modified_times <= last_cache_time)) {
+      # Load cached data
+      hdr_data_list[[year]] <- readRDS(cache_path_hdr)
+      all_hdr_data_list[[year]] <- readRDS(cache_path_all_hdr)
+      ferrbyox_data_list[[year]] <- readRDS(cache_path_ferrybox)
+      message(paste("Using cached HDR, All HDR, and Ferrybox data for year", year))
+      next
+    }
+  }
+  
+  # Proceed with data processing if cache doesn't exist or files have changed
   all_hdr_data <- ifcb_read_hdr_data(data_folder, gps_only = FALSE, verbose = FALSE)
 
   if (params$classifier == "Tangesund") {
-    
-    # Keep only relevant information and add position to Tangesund
     hdr_data <- all_hdr_data %>%
       select(sample, timestamp, date, year, month, day, time, ifcb_number) %>%
-      mutate(gpsLatitude = 58.07500,
-             gpsLongitude = 11.49300)
+      mutate(gpsLatitude = 58.07500, gpsLongitude = 11.49300)
   } else {
-   
-    # Keep only relevant information
     hdr_data <- all_hdr_data %>%
       select(sample, gpsLatitude, gpsLongitude, timestamp, date, year, month, day, time, ifcb_number)
   }
 
-  # Identify rows in hdr_data where the year is not 2016 and GPS latitude or longitude is missing
-  missing_position <- hdr_data %>%
-    filter(is.na(gpsLatitude)) %>%
-    filter(is.na(gpsLongitude))
-
-  # If there are rows with missing GPS positions
+  missing_position <- hdr_data %>% filter(is.na(gpsLatitude) | is.na(gpsLongitude))
   if (nrow(missing_position) > 0) {
-    
-    # Retrieve ferrybox positions for the timestamps of the missing GPS data
-    ferrybox_positions <- ifcb_get_ferrybox_data(missing_position$timestamp, ferrybox_path)
-    
-    # Rename GPS latitude and longitude columns in ferrybox_positions to avoid conflicts
-    ferrybox_positions <- ferrybox_positions %>%
-      rename(gpsLatitude_fb = gpsLatitude,
-             gpsLongitude_fb = gpsLongitude)
-
-    # Merge hdr_data with ferrybox_positions based on timestamps
+    ferrybox_positions <- ifcb_get_ferrybox_data(missing_position$timestamp, ferrybox_path) %>%
+      rename(gpsLatitude_fb = gpsLatitude, gpsLongitude_fb = gpsLongitude)
     hdr_data <- hdr_data %>%
       left_join(ferrybox_positions, by = "timestamp") %>%
       mutate(gpsLatitude = coalesce(gpsLatitude, gpsLatitude_fb),
              gpsLongitude = coalesce(gpsLongitude, gpsLongitude_fb)) %>%
-      select(-gpsLongitude_fb, -gpsLatitude_fb)
+      select(-gpsLatitude_fb, -gpsLongitude_fb)
   }
+
+  ferrybox_parameters <- c("70", "80070", "8063", "88063", "8165", "88165", "8173", 
+                           "88173", "8166","88166", "8172", "88172", "8174", "88174", 
+                           "8177", "88177", "8179", "88179", "8181", "88181", "8190", 
+                           "88190", "8191", "88191")
   
-  # Define ferrybox parameter numbers to be extracted
-  ferrybox_parameters <- c("70", "80070", "8063", "88063", "8165", "88165",
-                           "8173", "88173", "8166","88166", "8172", "88172", "8174",
-                           "88174", "8177", "88177", "8179", "88179",
-                           "8181", "88181", "8190", "88190", "8191", "88191")
-  
-  if(!params$classifier == "Tangesund") {
-    
-    # Get ferrybox data for Svea data
-    ferrybox_data <- ifcb_get_ferrybox_data(hdr_data$timestamp, 
-                                            ferrybox_path, 
-                                            parameters = ferrybox_parameters)
+  if (!params$classifier == "Tangesund") {
+    ferrybox_data <- ifcb_get_ferrybox_data(hdr_data$timestamp, ferrybox_path, parameters = ferrybox_parameters)
   } else {
-    
-    column_names <- c("timestamp", ferrybox_parameters)
-    
-    # Create a data frame with one row filled with NA values for Tangesund data
-    ferrybox_data <- data.frame(matrix(NA, ncol = length(column_names), nrow = 1))
-    colnames(ferrybox_data) <- column_names
+    ferrybox_data <- data.frame(matrix(NA, ncol = length(ferrybox_parameters) + 1, nrow = 1))
+    colnames(ferrybox_data) <- c("timestamp", ferrybox_parameters)
   }
-  
-  # Store the processed hdr_data in the list
-  hdr_data_list[[as.character(params$year[i])]] <- hdr_data
-  
-  # Store all the processed hdr_data in the list
-  all_hdr_data_list[[as.character(params$year[i])]] <- all_hdr_data
-  
-  # Store all the ferrybox data in the list
-  ferrbyox_data_list[[as.character(params$year[i])]] <- ferrybox_data
+
+  hdr_data_list[[year]] <- hdr_data
+  all_hdr_data_list[[year]] <- all_hdr_data
+  ferrbyox_data_list[[year]] <- ferrybox_data
+
+  # Save the processed data to cache for this year
+  saveRDS(hdr_data_list[[year]], cache_path_hdr)
+  saveRDS(all_hdr_data_list[[year]], cache_path_all_hdr)
+  saveRDS(ferrbyox_data_list[[year]], cache_path_ferrybox)
 }
 
 # End time
@@ -305,18 +300,51 @@ start.time <- Sys.time()
 svepa_list <- list()
 
 for (i in seq_along(params$year)) {
+  year <- as.character(params$year[i])
   
-  if (params$classifier == "Tangesund") {
-    
-    # Create an empty vector
-    cruise_numbers <- data.frame(sample = as.character(), cruise_number = as.character())
-    
+  # Define cache paths
+  cache_path_svepa <- file.path("cache", paste0("svepa_data_cache_", year, ".rds"))
+  last_time_range_path <- file.path("cache", paste0("svepa_time_range_", year, ".rds"))
+  
+  # Check for changes in hdr_data
+  hdr_data <- hdr_data_list[[year]]
+  hdr_data_files <- list.files(data_folders[[i]], pattern = "\\.hdr$", full.names = TRUE)  # Adjust pattern as needed
+  hdr_modified_time <- max(file.info(hdr_data_files)$mtime, na.rm = TRUE)
+  
+  # Load last cached data if it exists
+  if (file.exists(cache_path_svepa)) {
+    last_cache_time <- file.info(cache_path_svepa)$mtime
+    # Check if hdr_data has changed
+    if (hdr_modified_time <= last_cache_time) {
+      # Load cached data
+      svepa_list[[year]] <- readRDS(cache_path_svepa)
+      message(paste("Using cached SVEPA data for year", year))
+      next
+    }
+  }
+  
+  # Check for changes in the time range
+  if (file.exists(last_time_range_path)) {
+    last_time_range <- readRDS(last_time_range_path)
   } else {
-    
-    # Get current HDR data
-    hdr_data <- hdr_data_list[[as.character(params$year[i])]]
+    last_time_range <- NULL
+  }
+  
+  # Get the current time range
+  current_time_range <- svepa_event$get_time_range()
+  
+  # Compare time ranges
+  if (identical(last_time_range, current_time_range)) {
+    # Load cached data
+    svepa_list[[year]] <- readRDS(cache_path_svepa)
+    message(paste("Using cached SVEPA data for year", year))
+    next
+  }
 
-    # Create an empty vector
+  # Proceed to compute SVEPA data if cache doesn't exist or if changes are detected
+  if (params$classifier == "Tangesund") {
+    cruise_numbers <- data.frame(sample = as.character(), cruise_number = as.character())
+  } else {
     cruise_numbers <- data.frame(sample = as.character(), cruise_number = as.character())
     
     for (sample in seq_along(hdr_data$sample)) {
@@ -340,7 +368,13 @@ for (i in seq_along(params$year)) {
   }
   
   # Store the analysis date in the list
-  svepa_list[[as.character(params$year[i])]] <- cruise_numbers 
+  svepa_list[[year]] <- cruise_numbers 
+  
+  # Save results to cache
+  saveRDS(svepa_list[[year]], cache_path_svepa)
+  
+  # Save current time range to cache
+  saveRDS(current_time_range, last_time_range_path)
 }
 
 # End time
@@ -361,53 +395,75 @@ sample_depth <- read_csv("data/tangesund_depthdata.csv", col_types = cols()) %>%
 This section involves summarizing the biovolume data for each year. The biovolume calculation uses the specified classifier and threshold to estimate the biomass of various phytoplankton classes within the samples.
 
 ```{r get_biovolumes, include=TRUE, results = 'hide', echo=TRUE, warning=FALSE}
-# Start time
-start.time <- Sys.time()
-
-# Initialize a list to store the processed biovolume data and analysis date for each year
+# Initialize lists to store processed biovolume data and analysis dates for each year
 biovolume_data_list <- list()
 analysis_date_list <- list()
 
-for (i in seq_along(params$year)) {
-  
-  cat("# Year:", params$year[i], "\n")
+# Start time
+start.time <- Sys.time()
 
-  # Get current folders
+for (i in seq_along(params$year)) {
+  year <- as.character(params$year[i])
+  
+  # Define current folders
   data_folder <- data_folders[[i]]
   class_folder <- class_folders[[i]]
   feature_folder <- feature_folders[[i]]
 
-  # Summarize biovolume data using IFCB data from the specified folders
+  # Define cache paths specific to each year
+  cache_path_biovolume <- file.path("cache", paste0("biovolume_data_cache_", year, "_", params$classifier, ".rds"))
+  cache_path_analysis_date <- file.path("cache", paste0("analysis_date_cache_", year, "_", params$classifier, ".rds"))
+
+  # Check if cache exists and if files in class_folder have changed
+  mat_files <- list.files(class_folder, pattern = "\\.mat$", full.names = TRUE)
+  file_modified_times <- sapply(mat_files, function(x) file.info(x)$mtime)
+
+  # Load cache if it exists and files have not been modified
+  if (file.exists(cache_path_biovolume) && file.exists(cache_path_analysis_date)) {
+    last_cache_time <- max(file.info(c(cache_path_biovolume, cache_path_analysis_date))$mtime)
+    if (all(file_modified_times <= last_cache_time)) {
+      # Load cached data
+      biovolume_data_list[[year]] <- readRDS(cache_path_biovolume)
+      analysis_date_list[[year]] <- readRDS(cache_path_analysis_date)
+      message(paste("Using cached biovolume and analysis date data for year", year))
+      next
+    }
+  }
+
+  # Proceed with data processing if cache doesn't exist or files have changed
+  cat("# Year:", params$year[i], "\n")
+
+  # Summarize biovolume data
   biovolume_data <- ifcb_summarize_biovolumes(
     feature_folder,
     class_folder,
     hdr_folder = data_folder,
-    micron_factor = 1/3.4,
+    micron_factor = 1 / 3.4,
     diatom_class = "Bacillariophyceae",
     threshold = params$threshold
   )
 
   # Store the summarized biovolume data in the list
-  biovolume_data_list[[as.character(params$year[i])]] <- biovolume_data
+  biovolume_data_list[[year]] <- biovolume_data
 
-  ## Get analysis date from creation date of mat files
-  
-  # List all .mat files in the class directory
-  mat_files <- list.files(path = class_folder, pattern = "\\.mat$", full.names = TRUE)
-  
+  # Get analysis date from creation date of .mat files in class_folder
   creation_dates <- data.frame(sample = NULL, analysis_date = NULL)
   
   for (mat in mat_files) {
     file_info <- file.info(mat)$ctime
-    
-    temp <- data.frame(sample = sub("_class_v[0-9]+\\.mat$", "", basename(mat)), 
-                       analysis_date = as.Date(file_info))
-    
+    temp <- data.frame(
+      sample = sub("_class_v[0-9]+\\.mat$", "", basename(mat)),
+      analysis_date = as.Date(file_info)
+    )
     creation_dates <- rbind(creation_dates, temp)
   }
- 
+
   # Store the analysis date in the list
-  analysis_date_list[[as.character(params$year[i])]] <- creation_dates 
+  analysis_date_list[[year]] <- creation_dates
+
+  # Save processed data to cache
+  saveRDS(biovolume_data_list[[year]], cache_path_biovolume)
+  saveRDS(analysis_date_list[[year]], cache_path_analysis_date)
 }
 
 # End time
@@ -462,46 +518,71 @@ runtime_manual <- round(end.time - start.time, 2)
 In the PSD quality control step, we calculate the particle size distribution for each year's data according to Hayashi et al., in prep. This involves determining various parameters such as bead size, bubble presence, and biomass, ensuring that the data meets quality standards.
 
 ```{r psd_check, include=TRUE, results = 'hide', echo=TRUE, message=FALSE}
-# Start time
-start.time <- Sys.time()
-
 # Initialize a list to store PSD results for each year
 psd_list <- list()
 
-for (i in seq_along(params$year)) {
+# Start time
+start.time <- Sys.time()
 
-  # Get current data folder
+for (i in seq_along(params$year)) {
+  year <- as.character(params$year[i])
+
+  # Get current folders
   feature_folder <- feature_folders[[i]]
   data_folder <- data_folders[[i]]
 
-  # Define result and plot folder paths
-  psd_result_files <- file.path(ifcb_path, "psd", paste0("psd_", params$year[i]))
-  psd_plot_folder <- file.path(ifcb_path, "psd", "figures", params$year[i])
+  # Define cache path specific to each year
+  cache_path_psd <- file.path("cache", paste0("psd_data_cache_", year, ".rds"))
 
+  # Check if cache exists and if files in feature_folder have changed
+  feature_files <- list.files(feature_folder, pattern = "\\.mat$", full.names = TRUE)
+  file_modified_times <- sapply(feature_files, function(x) file.info(x)$mtime)
+
+  # Load cache if it exists and files have not been modified
+  if (file.exists(cache_path_psd)) {
+    last_cache_time <- file.info(cache_path_psd)$mtime
+    if (all(file_modified_times <= last_cache_time)) {
+      # Load cached data
+      psd_list[[year]] <- readRDS(cache_path_psd)
+      message(paste("Using cached PSD data for year", year))
+      next
+    }
+  }
+
+  # Proceed with PSD calculation if cache doesn't exist or files have changed
+  psd_result_files <- file.path(ifcb_path, "psd", paste0("psd_", year))
+  psd_plot_folder <- file.path(ifcb_path, "psd", "figures", year)
+
+  # Remove existing plot folder to avoid conflicts
   if (dir.exists(psd_plot_folder)) {
     unlink(psd_plot_folder, recursive = TRUE)
   }
 
-  # Calculate the particle size distribution (PSD) using IFCB data from the specified folders
-  psd <- ifcb_psd(feature_folder = feature_folder,
-                  hdr_folder = data_folder,
-                  save_data = TRUE,
-                  output_file = psd_result_files,
-                  plot_folder = psd_plot_folder,
-                  use_marker = FALSE,
-                  start_fit = 15,
-                  r_sqr = 0.5,
-                  beads = 10 ** 20,
-                  bubbles = 110,
-                  incomplete = c(1500, 3),
-                  missing_cells = 0.7,
-                  biomass = 1000,
-                  bloom = 10,
-                  humidity = 75,
-                  micron_factor = 1/3.4)
+  # Calculate PSD
+  psd <- ifcb_psd(
+    feature_folder = feature_folder,
+    hdr_folder = data_folder,
+    save_data = TRUE,
+    output_file = psd_result_files,
+    plot_folder = psd_plot_folder,
+    use_marker = FALSE,
+    start_fit = 15,
+    r_sqr = 0.5,
+    beads = 10 ^ 20,
+    bubbles = 110,
+    incomplete = c(1500, 3),
+    missing_cells = 0.7,
+    biomass = 1000,
+    bloom = 10,
+    humidity = 75,
+    micron_factor = 1 / 3.4
+  )
 
   # Store PSD results in the list
-  psd_list[[as.character(params$year[i])]] <- psd
+  psd_list[[year]] <- psd
+
+  # Save PSD data to cache
+  saveRDS(psd_list[[year]], cache_path_psd)
 }
 
 # End time
