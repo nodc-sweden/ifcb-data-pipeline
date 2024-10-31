@@ -2,12 +2,12 @@
 author: "Anders Torstensson"
 date: "`r Sys.Date()`"
 params: 
-  classifier: "Skagerrak-Kattegat" # "Baltic", "Skagerrak-Kattegat" or "Tångesund"
+  classifier: "Baltic" # "Baltic", "Skagerrak-Kattegat" or "Tangesund"
   year: [2022, 2023, 2024] # each year separated by comma, e.g. [2022, 2023, 2024]
   threshold: "opt" # MATLAB classifier threshold, "opt", "adhoc" or "none"
   remove_flagged_data: !r c("bubbles", "incomplete", "near land") # What flags should be used for filtering data e.g. c("bubbles", "incomplete", "near land")
   regional: TRUE # If output should only contain data from the classifier region, e.g. Baltic data for the Baltic classifier
-  multiyear_delivery: TRUE # Include all years in a single data delivery, or split by year
+  multiyear_delivery: TRUE # Include all years in a single data delivery
   f1_threshold: 0.9 # Remove classes below threshold this, not currently used
  
 output: html_document
@@ -85,6 +85,26 @@ zip_file <- "data/shapefiles/EEA_Coastline_Polygon_Shape.zip"
 extracted_dir <- "data/shapefiles/EEA_Coastline_Polygon_Shape"
 shapefile_path <- file.path(extracted_dir, "EEA_Coastline_20170228.shp")
 
+# Create a named list of classifiers and their associated URLs
+classifier_urls <- list(
+    "Skagerrak-Kattegat" = "https://ecotaxa.obs-vlfr.fr/prj/14392",
+    "Baltic" = "https://ecotaxa.obs-vlfr.fr/prj/822",
+    "Tangesund" = "https://ecotaxa.obs-vlfr.fr/prj/899"
+)
+
+# Retrieve the URL based on the classifier, default to NA if not found
+associated_media_manual <- coalesce(classifier_urls[[params$classifier]], NA)
+
+# Create a named list of classifiers and their associated URLs
+humans <- list(
+    "Skagerrak-Kattegat" = "Ann-Turi Skjevik",
+    "Baltic" = "Ann-Turi Skjevik",
+    "Tangesund" = "Malin Mohlin"
+)
+
+# Retrieve the URL based on the classifier, default to NA if not found
+human_verification <- coalesce(humans[[params$classifier]], NA)
+
 # Check if the shapefile already exists
 if (!file.exists(shapefile_path)) {
   
@@ -129,6 +149,7 @@ feature_folders <- list()
 data_folders <- list()
 class_folders <- list()
 max_versions <- list()
+output_folders <- list()
 
 # Loop through each year in params$year
 for (year in params$year) {
@@ -158,13 +179,24 @@ for (year in params$year) {
   max_version <- max(versions, na.rm = TRUE)
   class_folder <- class_subfolders[which(versions == max_version)]
 
+  # Define output path
+  output <- paste0("shark", year, "_", params$classifier, "_v", max_version)
+  
   # Append to list
   class_folders <- c(class_folders, class_folder)
   max_versions <- c(max_versions, max_version)
+  output_folders <- c(output_folders, output)
 }
 
 # Define results folders
 output_folder <- file.path(ifcb_path, "shark")
+dashboard_metadata_folder <- file.path(ifcb_path, "ifcbdb_metadata")
+
+# Read sample blacklist
+blacklist <- read_tsv("data/sample_blacklist.tsv", col_types = cols())
+
+# Create a regex pattern by joining all blacklist samples with `|`
+blacklist_pattern <- paste(blacklist$sample, collapse = "|")
 ```
 
 ## Reading HDR Data
@@ -188,9 +220,9 @@ for (i in seq_along(params$year)) {
   # Read HDR data from the specified data folder
   all_hdr_data <- ifcb_read_hdr_data(data_folder, gps_only = FALSE, verbose = FALSE)
 
-  if (params$classifier == "Tångesund") {
+  if (params$classifier == "Tangesund") {
     
-    # Keep only relevant information and add position to Tångesund
+    # Keep only relevant information and add position to Tangesund
     hdr_data <- all_hdr_data %>%
       select(sample, timestamp, date, year, month, day, time, ifcb_number) %>%
       mutate(gpsLatitude = 58.07500,
@@ -232,7 +264,7 @@ for (i in seq_along(params$year)) {
                            "88174", "8177", "88177", "8179", "88179",
                            "8181", "88181", "8190", "88190", "8191", "88191")
   
-  if(!params$classifier == "Tångesund") {
+  if(!params$classifier == "Tangesund") {
     
     # Get ferrybox data for Svea data
     ferrybox_data <- ifcb_get_ferrybox_data(hdr_data$timestamp, 
@@ -242,7 +274,7 @@ for (i in seq_along(params$year)) {
     
     column_names <- c("timestamp", ferrybox_parameters)
     
-    # Create a data frame with one row filled with NA values for Tångesund data
+    # Create a data frame with one row filled with NA values for Tangesund data
     ferrybox_data <- data.frame(matrix(NA, ncol = length(column_names), nrow = 1))
     colnames(ferrybox_data) <- column_names
   }
@@ -274,7 +306,7 @@ svepa_list <- list()
 
 for (i in seq_along(params$year)) {
   
-  if (params$classifier == "Tångesund") {
+  if (params$classifier == "Tangesund") {
     
     # Create an empty vector
     cruise_numbers <- data.frame(sample = as.character(), cruise_number = as.character())
@@ -770,13 +802,17 @@ for (i in seq_along(params$year)) {
 
   # Extract Aphia IDs and class names from WoRMS
   aphia_id <- sapply(worms_records, iRfcb:::extract_aphia_id)
-  classes <- sapply(worms_records, iRfcb:::extract_class)
 
+  # Select relevant information from WoRMS
+  worms_df <- bind_rows(worms_records) %>%
+    select(AphiaID, rank, kingdom, phylum, class, order, family, genus) %>%
+    rename(worms_kingdom = kingdom, worms_phylum = phylum, worms_class = class, worms_order = order,
+           worms_family = family, worms_genus = genus)
+  
   # Create class_names data frame with taxa information
   class_names <- data.frame(class = taxa_names,
                             class_clean = taxa_names_clean,
                             aphia_id,
-                            worms_class = classes,
                             sflag = ifelse(grepl("-like", taxa_names) | 
                                              grepl("_cf_", taxa_names)| 
                                              grepl("_like", taxa_names),
@@ -794,7 +830,20 @@ for (i in seq_along(params$year)) {
     mutate(sflag = str_trim(sflag)) %>%
     mutate(trophic_type = ifcb_get_trophic_type(class_clean)) %>%
     left_join(class_scores_list[[as.character(params$year[i])]], by = "class") %>%
-    distinct()
+    left_join(worms_df, by = c("aphia_id" = "AphiaID")) %>%
+    mutate(
+      species_flag_taxon_name = case_when(
+        is.na(sflag) ~ NA,
+        sflag == "SPP" ~ paste(class_clean, "spp."),
+        sflag == "GRP" ~ paste(class_clean, "group"),
+        sflag == "CF" & rank == "Species" ~ sub(" ", " cf. ", class_clean), 
+        sflag == "CF" & rank == "Genus" ~ paste0(worms_order, ": ", worms_family, " cf. ", worms_genus),
+        TRUE ~ class_clean # Keeps class_clean as default
+      )
+    ) %>%
+    distinct() %>%
+    select(-rank, -worms_kingdom, -worms_phylum, 
+           -worms_order, -worms_family, -worms_genus)
 
   # Store class_names in the list
   class_names_list[[as.character(params$year[i])]] <- class_names
@@ -841,7 +890,8 @@ for (i in seq_along(params$year)) {
   # Perform multiple joins to combine data from multiple sources for the current year
   data <- biovolume_data %>%
     left_join(sample_depth, by = "sample") %>%
-    mutate(sample = sapply(strsplit(sample, "_"), `[`, 1)) %>%
+    mutate(pid = sample,
+           sample = sapply(strsplit(sample, "_"), `[`, 1)) %>%
     left_join(date_info, by = "sample") %>%
     left_join(qflags_select, by = "sample") %>%
     left_join(positions, by = "sample") %>%
@@ -849,15 +899,18 @@ for (i in seq_along(params$year)) {
     left_join(analysis_date, by = "sample") %>%
     left_join(cruise_numbers, by = "sample") %>%
     mutate(platform = "IFCB",
-           verification = NA,
+           verification = "PredictedByMachine",
+           verified_by = NA,
            classifier_created_by = "Anders Torstensson",
            classifier_used = paste0("SMHI-", params$classifier, " v.", max_versions[[i]]),
-           metoa = "IMA-SW")
+           metoa = "IMA-SW",
+           associated_media = NA)
 
   # Perform multiple joins to combine manual data from multiple sources for the current year
   data_manual <- manual_data %>%
     left_join(sample_depth, by = "sample") %>%
-    mutate(sample = sapply(strsplit(sample, "_"), `[`, 1)) %>%
+    mutate(pid = sample,
+           sample = sapply(strsplit(sample, "_"), `[`, 1)) %>%
     left_join(date_info, by = "sample") %>%
     filter(year == params$year[i]) %>%
     left_join(positions, by = "sample") %>%
@@ -868,9 +921,11 @@ for (i in seq_along(params$year)) {
     select(-precision, -detection_probability, -miss_probability, -f1) %>%
     mutate(platform = "IFCB",
            verification = "ValidatedByHuman",
+           verified_by = human_verification,
            classifier_created_by = NA,
            classifier_used = NA,
-           metoa = "IMA")
+           metoa = "IMA",
+           associated_media = associated_media_manual)
   
   # Combine human verified data (manual annotations) with automatic classification
   data_aggregated <- bind_rows(data, data_manual)
@@ -878,18 +933,18 @@ for (i in seq_along(params$year)) {
   # Combine with ferrybox data, remove data with bad data flags (3 and above)
   data_aggregated <- data_aggregated %>%
     left_join(ferrybox_data, by = "timestamp") %>%
-    mutate(`80070` = ifelse(`70` < 3, `80070`, NA),
-           `8063` = ifelse(`88063` < 3, `8063`, NA),
-           `8165` = ifelse(`88165` < 3, `8165`, NA),
-           `8173` = ifelse(`88173` < 3, `8173`, NA),
-           `8166` = ifelse(`88166` < 3, `8166`, NA),
-           `8172` = ifelse(`88172` < 3, `8172`, NA),
-           `8174` = ifelse(`88174` < 3, `8174`, NA),
-           `8177` = ifelse(`88177` < 3, `8177`, NA),
-           `8179` = ifelse(`88179` < 3, `8179`, NA),
-           `8181` = ifelse(`88181` < 3, `8181`, NA),
-           `8190` = ifelse(`88190` < 3, `8190`, NA),
-           `8191` = ifelse(`88191` < 3, `8191`, NA),
+    mutate(`80070` = ifelse(`70` == 1, `80070`, NA),
+           `8063` = ifelse(`88063` == 1, `8063`, NA),
+           `8165` = ifelse(`88165` == 1, `8165`, NA),
+           `8173` = ifelse(`88173` == 1, `8173`, NA),
+           `8166` = ifelse(`88166` == 1, `8166`, NA),
+           `8172` = ifelse(`88172` == 1, `8172`, NA),
+           `8174` = ifelse(`88174` == 1, `8174`, NA),
+           `8177` = ifelse(`88177` == 1, `8177`, NA),
+           `8179` = ifelse(`88179` == 1, `8179`, NA),
+           `8181` = ifelse(`88181` == 1, `8181`, NA),
+           `8190` = ifelse(`88190` == 1, `8190`, NA),
+           `8191` = ifelse(`88191` == 1, `8191`, NA),
            )
   
   # Filter data from the classifier region, when specified in params
@@ -1037,6 +1092,10 @@ for (i in seq_along(params$year)) {
     any(sapply(params$remove_flagged_data, function(y) grepl(y, tolower(x), fixed = TRUE)))
   }), ]
   
+  # Filter blacklisted data
+  data_aggregated_year <- data_aggregated_year %>%
+    filter(!str_detect(sample, blacklist_pattern))
+  
   # Function to check if a column is entirely NA
   is_all_na <- function(x) {
     all(is.na(x))
@@ -1045,10 +1104,10 @@ for (i in seq_along(params$year)) {
   # Extract unclassified data
   unclassified <- data_aggregated_year %>%
     filter(class_clean == "unclassified") %>%
-    select(sample, classifier, counts, ml_analyzed, counts_per_liter, biovolume_mm3_per_liter, depth, timestamp,
+    select(sample, pid, classifier, counts, ml_analyzed, counts_per_liter, biovolume_mm3_per_liter, depth, timestamp,
            date, year, month, day, time, ifcb_number, platform, flag, gpsLatitude, gpsLongitude, near_land, in_baltic, 
-           basin, analysis_date, cruise_number, verification,
-           classifier_created_by, classifier_used, metoa) %>%
+           basin, analysis_date, cruise_number, verification, verified_by,
+           classifier_created_by, classifier_used, metoa, associated_media) %>%
     rename(unclassified_counts = counts,
            unclassified_abundance = counts_per_liter,
            unclassified_volume = biovolume_mm3_per_liter)
@@ -1058,7 +1117,8 @@ for (i in seq_along(params$year)) {
     select(-worms_class, -class_clean, -aphia_id, -sflag, -trophic_type, -is_diatom, -biovolume_mm3,
            -carbon_ug, -metoa, -class, -precision, -detection_probability, -miss_probability, -f1, 
            -carbon_ug_per_liter, -counts, -counts_per_liter, -biovolume_mm3_per_liter, -ml_analyzed, 
-           -flag, -analysis_date, -verification, -platform, -classifier_created_by, -classifier_used, -classifier) %>%
+           -flag, -analysis_date, -verification, -platform, -classifier_created_by, -classifier_used, -classifier,
+           -associated_media, -verified_by, -species_flag_taxon_name) %>%
     mutate(platform = "SveaFB",
            analysis_date = date) %>%
     rename(ph = `70`,
@@ -1096,8 +1156,8 @@ for (i in seq_along(params$year)) {
   # Create a data frame with empty rows matching the length of data
   shark_col[1:nrow(data_aggregated_year),] <- ""
 
-  if (params$classifier == "Tångesund") {
-    station_name <- "Tångesund"
+  if (params$classifier == "Tangesund") {
+    station_name <- "Tangesund"
     depth <- data_aggregated_year$depth
   } else {
     station_name <- paste0("RV_FB_", data_aggregated_year$sample)
@@ -1111,16 +1171,16 @@ for (i in seq_along(params$year)) {
            SAMPLING_PLATFORM = data_aggregated_year$platform,
            PROJ = ifelse(params$year[i] < 2025, "IFCB, DTO, JERICO", "IFCB"),
            ORDERER = "SMHI",
-           SHIPC = ifelse(params$classifier == "Tångesund", NA, "77SE"),
+           SHIPC = ifelse(params$classifier == "Tangesund", NA, "77SE"),
            CRUISE_NO = data_aggregated_year$cruise_number,
            SDATE = data_aggregated_year$date,
-           DATE_TIME = format(data_aggregated_year$timestamp, "%Y%m%d%H%M%S"),
+           DATE_TIME = as.character(format(data_aggregated_year$timestamp, "%Y%m%d%H%M%S")),
            TIMEZONE = "UTC",
            STIME = data_aggregated_year$time,
            LATIT = data_aggregated_year$gpsLatitude,
            LONGI = data_aggregated_year$gpsLongitude,
            POSYS = "GPS",
-           PDMET = ifelse(params$classifier == "Tångesund", "SEP", "MIX"),
+           PDMET = ifelse(params$classifier == "Tangesund", "SEP", "MIX"),
            METFP = "None",
            IFCBNO	= data_aggregated_year$ifcb_number,
            MPROG = "PROJ",
@@ -1128,14 +1188,16 @@ for (i in seq_along(params$year)) {
            MXDEP = depth,
            SLABO = "SMHI",
            ACKR_SMP = "N",
-           SMTYP = ifelse(params$classifier == "Tångesund", NA, "FerryBox"),
+           SMTYP = ifelse(params$classifier == "Tangesund", NA, "FerryBox"),
            SMVOL = round(data_aggregated_year$ml_analyzed, 3), # VOLUME
-           SMPNO = data_aggregated_year$sample, # SAMPLE NAME
+           SMPNO = data_aggregated_year$pid, # SAMPLE NAME
            LATNM = data_aggregated_year$class_clean, # SPECIES
            SFLAG = data_aggregated_year$sflag, # SP or SPP
+           LATNM_SFLAG = data_aggregated_year$species_flag_taxon_name,
            TRPHY = data_aggregated_year$trophic_type,
            APHIA_ID = data_aggregated_year$aphia_id,
            IMAGE_VERIFICATION = data_aggregated_year$verification,
+           VERIFIED_BY = data_aggregated_year$verified_by,
            CLASS_NAME = data_aggregated_year$class,
            CLASS_F1 = round(data_aggregated_year$f1*100, 3), # In percent
            COUNT = data_aggregated_year$counts, # COUNTS per SAMPLE
@@ -1145,7 +1207,8 @@ for (i in seq_along(params$year)) {
            C_CONC = signif(data_aggregated_year$carbon_ug_per_liter, 6), # CARBON PER LITER
            BIOVOL = signif(data_aggregated_year$biovolume_mm3_per_liter, 6), # BIOVOLUME PER LITER
            METOA = data_aggregated_year$metoa,
-           COUNTPROG = paste("ifcb-analysis, iRfcb", packageVersion("iRfcb")),
+           ASSOCIATED_MEDIA = data_aggregated_year$associated_media,
+           CLASSPROG = paste("https://github.com/hsosik/ifcb-analysis/releases/tag/v2.0"),
            ALABO = "SMHI",
            ACKR_ANA = "N",
            ANADATE = data_aggregated_year$analysis_date,
@@ -1153,7 +1216,7 @@ for (i in seq_along(params$year)) {
                          "https://github.com/kudelalab/PSD",
                          "https://github.com/EuropeanIFCBGroup/iRfcb",
                          sep = ", "), # METHOD
-           TRAINING_SET_ANNOTATED_BY = ifelse(params$classifier == "Tångesund", "Malin Mohlin", "Ann-Turi Skjevik"),
+           TRAINING_SET_ANNOTATED_BY = ifelse(params$classifier == "Tangesund", "Malin Mohlin", "Ann-Turi Skjevik"),
            TRAINING_SET = "https://doi.org/10.17044/scilifelab.25883455.v3",
            CLASSIFIER_CREATED_BY = data_aggregated_year$classifier_created_by,
            CLASSIFIER_USED = basename(gsub("\\\\", "/", iconv(data_aggregated_year$classifier, from = "Windows-1252", to = "UTF-8"))),
@@ -1162,7 +1225,7 @@ for (i in seq_along(params$year)) {
            UNCLASSIFIED_COUNTS = round(data_aggregated_year$unclassified_counts, 1),
            UNCLASSIFIED_ABUNDANCE = signif(data_aggregated_year$unclassified_abundance, 6),
            UNCLASSIFIED_VOLUME = signif(data_aggregated_year$unclassified_volume, 6),
-           PH_FB = round(data_aggregated_year$ph, 3),
+           PH_FB = NA, # round(data_aggregated_year$ph, 3), # Wait until method is validated
            CHL_FB = round(data_aggregated_year$chl, 4),
            CDOM_FB = round(data_aggregated_year$cdom, 4),
            PHYC_FB = data_aggregated_year$pc,
@@ -1194,9 +1257,9 @@ for (i in seq_along(params$year)) {
       METDC = ifelse(if_any(c(PH_FB, CHL_FB, CDOM_FB, PHYC_FB, PHER_FB, WATERFLOW_FB, TURB_FB,
                               PCO2_FB, TEMP_FB, PSAL_FB, OSAT_FB, DOXY_FB), ~ !is.na(.x)),
                      NA, METDC),
-      COUNTPROG = ifelse(if_any(c(PH_FB, CHL_FB, CDOM_FB, PHYC_FB, PHER_FB, WATERFLOW_FB, TURB_FB,
+      CLASSPROG = ifelse(if_any(c(PH_FB, CHL_FB, CDOM_FB, PHYC_FB, PHER_FB, WATERFLOW_FB, TURB_FB,
                                   PCO2_FB, TEMP_FB, PSAL_FB, OSAT_FB, DOXY_FB), ~ !is.na(.x)),
-                         NA, COUNTPROG),
+                         NA, CLASSPROG),
       METOA = ifelse(if_any(c(PH_FB, CHL_FB, CDOM_FB, PHYC_FB, PHER_FB, WATERFLOW_FB, TURB_FB,
                               PCO2_FB, TEMP_FB, PSAL_FB, OSAT_FB, DOXY_FB), ~ !is.na(.x)),
                      NA, METOA),
@@ -1205,8 +1268,7 @@ for (i in seq_along(params$year)) {
                      NA, PDMET),
       MANUAL_QC_DATE = as.Date(MANUAL_QC_DATE)
     )
-    
-
+  
   # Store shark_df for the current year in the list
   shark_dfs[[as.character(params$year[i])]] <- shark_df
 }
@@ -1221,11 +1283,13 @@ Here, the processed data and corresponding metadata (including delivery notes) a
 ```{r data_delivery, message=FALSE}
 if (params$multiyear_delivery) {
   # Define data delivery path
-  data_delivery_path <- file.path(output_folder, paste0("SHARK_IFCB_", 
-                                                        paste(min(params$year), max(params$year), sep = "_"), 
-                                                        "_", 
-                                                        params$classifier, 
-                                                        "_SMHI"))
+  data_delivery_path <- file.path(output_folder, 
+                                  "multiyear",
+                                  paste0("SHARK_IFCB_", 
+                                         paste(min(params$year), max(params$year), sep = "_"), 
+                                         "_", 
+                                         params$classifier, 
+                                         "_SMHI"))
   
   # Define paths for processed, received, and correspondence data folders for current year
   processed_data <- file.path(data_delivery_path, "processed_data")
@@ -1274,81 +1338,83 @@ if (params$multiyear_delivery) {
   # Write delivery note content to a .txt file in processed_data folder for current year
   writeLines(delivery_note_content, file.path(processed_data, "delivery_note.txt"))
   
-} else {
-  
-  # Initialize lists to store paths and delivery note contents for each year
-  processed_data_paths <- list()
-  received_data_paths <- list()
-  delivery_notes <- list()
-  data_delivery_paths <- list()
-  
-  # Loop through each year
-  for (i in seq_along(params$year)) {
-    # Define data deliviery path
-    data_delivery_path <- file.path(output_folder, paste0("SHARK_IFCB_", 
-                                                          as.character(params$year[i]), 
-                                                          "_", 
-                                                          params$classifier, 
-                                                          "_SMHI"))
-    
-    # Define paths for processed, received, and correspondence data folders for current year
-    processed_data <- file.path(data_delivery_path, "processed_data")
-    received_data <- file.path(data_delivery_path, "received_data")
-    correspondence <- file.path(data_delivery_path, "correspondence")
-    
-    # Create directories if they do not exist
-    if (!dir.exists(processed_data)) {
-      dir.create(processed_data, recursive = TRUE)
-    }
-    
-    if (!dir.exists(received_data)) {
-      dir.create(received_data, recursive = TRUE)
-    }
-    
-    if (!dir.exists(correspondence)) {
-      dir.create(correspondence, recursive = TRUE)
-    }
-    
-    # Save shark_df data to a tab-delimited file in processed_data folder for current year
-    shark_df_year <- shark_dfs[[as.character(params$year[i])]] # Retrieve shark_df for current year
-    write_tsv(shark_df_year, file = file.path(processed_data, "data.txt"), na = "") # Save as tab-delimited file
-    
-    # Save shark_df data to a tab-delimited file in received_data folder with dynamic filename
-    filename <- paste0("shark_data_", 
-                       as.character(params$year[i]), "_", 
-                       tolower(params$classifier), "_", 
-                       Sys.Date(), ".txt")
-    write_tsv(shark_df_year, file = file.path(received_data, filename), na = "") # Save as tab-delimited file
-    
-    # Define delivery note content as a character vector for current year
-    delivery_note_content <- c(
-      paste("provtagningsår:", params$year[i]),
-      "datatyp: IFCB",
-      "rapporterande institut: SMHI",
-      paste("rapporteringsdatum:", Sys.Date()),
-      "kontaktperson: Anders Torstensson",
-      "format: Phytoplankton:PP_SMHI",
-      "data kontrollerad av: Leverantör",
-      "övervakningsprogram:",
-      "beställare: SMHI",
-      "projekt:",
-      "kommentarer:",
-      "status: test"
-    )
-    
-    # Write delivery note content to a .txt file in processed_data folder for current year
-    writeLines(delivery_note_content, file.path(processed_data, "delivery_note.txt"))
-    
-    # Store paths and delivery notes for current year
-    data_delivery_paths[[as.character(params$year[i])]] <- data_delivery_path
-  }
-  
-  # Print paths and confirmation message for each year
-  cat("Data delivery saved in", output_folder, "\n")
-  for (i in seq_along(params$year)) {
-    cat("Year:", params$year[i], "- data package:", data_delivery_paths[[as.character(params$year[i])]], "\n")
-  }
 }
+
+# Initialize lists to store paths and delivery note contents for each year
+processed_data_paths <- list()
+received_data_paths <- list()
+delivery_notes <- list()
+data_delivery_paths <- list()
+
+# Loop through each year
+for (i in seq_along(params$year)) {
+  # Define data deliviery path
+  data_delivery_path <- file.path(output_folder, 
+                                  output_folders[i],
+                                  paste0("SHARK_IFCB_", 
+                                         as.character(params$year[i]), 
+                                         "_", 
+                                         params$classifier, 
+                                         "_SMHI"))
+  
+  # Define paths for processed, received, and correspondence data folders for current year
+  processed_data <- file.path(data_delivery_path, "processed_data")
+  received_data <- file.path(data_delivery_path, "received_data")
+  correspondence <- file.path(data_delivery_path, "correspondence")
+  
+  # Create directories if they do not exist
+  if (!dir.exists(processed_data)) {
+    dir.create(processed_data, recursive = TRUE)
+  }
+  
+  if (!dir.exists(received_data)) {
+    dir.create(received_data, recursive = TRUE)
+  }
+  
+  if (!dir.exists(correspondence)) {
+    dir.create(correspondence, recursive = TRUE)
+  }
+  
+  # Save shark_df data to a tab-delimited file in processed_data folder for current year
+  shark_df_year <- shark_dfs[[as.character(params$year[i])]] # Retrieve shark_df for current year
+  write_tsv(shark_df_year, file = file.path(processed_data, "data.txt"), na = "") # Save as tab-delimited file
+  
+  # Save shark_df data to a tab-delimited file in received_data folder with dynamic filename
+  filename <- paste0("shark_data_", 
+                     as.character(params$year[i]), "_", 
+                     tolower(params$classifier), "_", 
+                     Sys.Date(), ".txt")
+  write_tsv(shark_df_year, file = file.path(received_data, filename), na = "") # Save as tab-delimited file
+  
+  # Define delivery note content as a character vector for current year
+  delivery_note_content <- c(
+    paste("provtagningsår:", params$year[i]),
+    "datatyp: IFCB",
+    "rapporterande institut: SMHI",
+    paste("rapporteringsdatum:", Sys.Date()),
+    "kontaktperson: Anders Torstensson",
+    "format: Phytoplankton:PP_SMHI",
+    "data kontrollerad av: Leverantör",
+    "övervakningsprogram:",
+    "beställare: SMHI",
+    "projekt:",
+    "kommentarer:",
+    "status: test"
+  )
+  
+  # Write delivery note content to a .txt file in processed_data folder for current year
+  writeLines(delivery_note_content, file.path(processed_data, "delivery_note.txt"))
+  
+  # Store paths and delivery notes for current year
+  data_delivery_paths[[as.character(params$year[i])]] <- data_delivery_path
+}
+
+# Print paths and confirmation message for each year
+cat("Data delivery saved in", output_folder, "\n")
+for (i in seq_along(params$year)) {
+  cat("Year:", params$year[i], "- data package:", data_delivery_paths[[as.character(params$year[i])]], "\n")
+}
+
 
 end.time <- Sys.time()
 runtime_knit <- round(end.time - knit.time, 2)
