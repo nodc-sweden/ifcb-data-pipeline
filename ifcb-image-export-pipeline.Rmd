@@ -2,8 +2,8 @@
 author: "Anders Torstensson"
 date: "`r Sys.Date()`"
 params: 
-  classifier: ["Baltic", "Skagerrak-Kattegat", "Tångesund", "iRfcb"] # "Baltic", "Skagerrak-Kattegat", "Tångesund", "iRfcb"
-  version: 4
+  classifier: ["Baltic", "Skagerrak-Kattegat", "Tangesund", "iRfcb"] # "Baltic", "Skagerrak-Kattegat", "Tangesund", "iRfcb"
+  version: "next"
  
 output: html_document
 knit: (function(inputFile, encoding) {
@@ -242,7 +242,7 @@ svepa_list <- list()
 
 for (i in seq_along(params$classifier[!grepl("iRfcb", params$classifier)])) {
   
-  if (params$classifier[i] == "Tångesund") {
+  if (params$classifier[i] == "Tangesund") {
     
     # Create an empty vector
     cruise_numbers <- data.frame(sample = as.character(), cruise_number = as.character())
@@ -415,18 +415,18 @@ for (classifier in seq_along(params$classifier[!grepl("iRfcb", params$classifier
   
   metadata <- metadata %>%
     mutate(annotated_by = ifelse(
-      params$classifier[!grepl("iRfcb", params$classifier)][classifier] == "Tångesund", 
+      params$classifier[!grepl("iRfcb", params$classifier)][classifier] == "Tangesund", 
                                  "Malin Mohlin", 
                                  "Ann-Turi Skjevik"),
            annotated_by_email = ifelse(
-             params$classifier[!grepl("iRfcb",params$classifier)][classifier] == "Tångesund", 
+             params$classifier[!grepl("iRfcb",params$classifier)][classifier] == "Tangesund", 
                                        mm_email, 
                                        ats_email),
-           ship = ifelse(params$classifier[!grepl("iRfcb", params$classifier)][classifier] == "Tångesund", 
+           ship = ifelse(params$classifier[!grepl("iRfcb", params$classifier)][classifier] == "Tangesund", 
                          "NO VESSEL", 
                          "RV Svea"))
   
-  if (params$classifier[!grepl("iRfcb", params$classifier)][classifier] == "Tångesund") {
+  if (params$classifier[!grepl("iRfcb", params$classifier)][classifier] == "Tangesund") {
     station_name <- "Tångesund"
     sample_name <- metadata$sample
     depth <- metadata$depth
@@ -932,7 +932,7 @@ for (classifier in seq_along(params$classifier)) {
 # Extract relevant values from the dataframe for each classifier
 baltic <- readme_df[readme_df$classifier == "Baltic", ]
 sk <- readme_df[readme_df$classifier == "Skagerrak-Kattegat", ]
-tangesund <- readme_df[readme_df$classifier == "Tångesund", ]
+tangesund <- readme_df[readme_df$classifier == "Tangesund", ]
 irfcb <- readme_df[readme_df$classifier == "iRfcb", ]
 
 # Update the README.md template placeholders
@@ -958,7 +958,7 @@ if ("Skagerrak-Kattegat" %in% params$classifier) {
 }
 
 # Replace Tångesund values
-if ("Tångesund" %in% params$classifier) {
+if ("Tangesund" %in% params$classifier) {
   updated_readme <- gsub("<YEAR_START_TANGESUND>", tangesund$min_year, updated_readme)
   updated_readme <- gsub("<YEAR_END_TANGESUND>", tangesund$max_year, updated_readme)
   updated_readme <- gsub("<N_IMAGES_TANGESUND>", formatC(tangesund$images, format = "d", big.mark = ","), updated_readme)
