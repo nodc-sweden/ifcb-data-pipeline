@@ -2,7 +2,7 @@
 author: "Anders Torstensson"
 date: "`r Sys.Date()`"
 params: 
-  classifier: "Skagerrak-Kattegat" # "Baltic", "Skagerrak-Kattegat" or "Tangesund"
+  classifier: "Baltic" # "Baltic", "Skagerrak-Kattegat" or "Tangesund"
   year: [2022, 2023, 2024] # each year separated by comma, e.g. [2022, 2023, 2024]
   threshold: "opt" # MATLAB classifier threshold, "opt", "adhoc" or "none"
   remove_flagged_data: !r c("bubbles", "incomplete", "near land") # What flags should be used for filtering data e.g. c("bubbles", "incomplete", "near land")
@@ -292,7 +292,7 @@ runtime_hdr <- round(end.time - start.time, 2)
 ## Get RV SVEA cruise number from SVEPA
 Here sample time stamps are matched with SVEPA using the [`svepa_event`](https://github.com/nodc-sweden/svepa_event) tool to extract cruise numbers for R/V Svea data.
 
-```{r get_svepa, include=TRUE, results = 'hide', echo=TRUE, warning=FALSE}
+```{r get_svepa, include=TRUE, echo=TRUE, warning=FALSE}
 # Start time
 start.time <- Sys.time()
 
@@ -394,7 +394,7 @@ sample_depth <- read_csv("data/tangesund_depthdata.csv", col_types = cols()) %>%
 ## Calculating Biovolumes
 This section involves summarizing the biovolume data for each year. The biovolume calculation uses the specified classifier and threshold to estimate the biomass of various phytoplankton classes within the samples.
 
-```{r get_biovolumes, include=TRUE, results = 'hide', echo=TRUE, warning=FALSE}
+```{r get_biovolumes, include=TRUE, echo=TRUE, warning=FALSE}
 # Initialize lists to store processed biovolume data and analysis dates for each year
 biovolume_data_list <- list()
 analysis_date_list <- list()
@@ -415,7 +415,7 @@ for (i in seq_along(params$year)) {
   cache_path_analysis_date <- file.path("cache", paste0("analysis_date_cache_", year, "_", params$classifier, ".rds"))
 
   # Check if cache exists and if files in class_folder have changed
-  mat_files <- list.files(class_folder, pattern = "\\.mat$", full.names = TRUE)
+  mat_files <- list.files(class_folder, pattern = "\\.mat$", full.names = TRUE, recursive = TRUE)
   file_modified_times <- sapply(mat_files, function(x) file.info(x)$mtime)
 
   # Load cache if it exists and files have not been modified
@@ -478,16 +478,59 @@ Here, we extract and summarize manual biovolume data (training dataset). These i
 # Start time
 start.time <- Sys.time()
 
-# Extract manually annotated data
-manual_data <- ifcb_summarize_biovolumes(file.path(ifcb_path, "features"),
-                                         manual_folder,
-                                         class2use_file,
-                                         file.path(ifcb_path, "data"),
-                                         mat_recursive = FALSE)
+# Define cache path specific to each year
+cache_path_manual <- file.path("cache", paste0("manual_data_cache_", params$classifier, ".rds"))
 
-# End time
-end.time <- Sys.time()
-runtime_manual <- round(end.time - start.time, 2)
+# List all .mat files in the manual folder and get their modification times
+manual_files <- list.files(manual_folder, pattern = "\\.mat$", full.names = TRUE)
+file_modified_times <- sapply(manual_files, function(x) file.info(x)$mtime)
+
+# Check if cache exists and if files in manual_folder have changed
+if (file.exists(cache_path_manual)) {
+  cache_info <- readRDS(cache_path_manual)
+  last_cache_time <- cache_info$cache_time
+  
+  # If no files have been modified since the last cache, load cached data
+  if (all(file_modified_times <= last_cache_time)) {
+    manual_data <- cache_info$data
+    runtime_manual <- cache_info$runtime
+    message("Loaded cached manual data")
+  } else {
+    # Otherwise, reprocess the manual data
+    manual_data <- ifcb_summarize_biovolumes(
+      file.path(ifcb_path, "features"),
+      manual_folder,
+      class2use_file,
+      file.path(ifcb_path, "data"),
+      mat_recursive = FALSE
+    )
+
+    # End time and compute runtime
+    end.time <- Sys.time()
+    runtime_manual <- round(end.time - start.time, 2)
+    
+    # Save new cache with updated modification time
+    saveRDS(list(data = manual_data, cache_time = Sys.time(), runtime = runtime_manual), cache_path_manual)
+    message("Cached new manual data")
+  }
+} else {
+  # Cache does not exist; process data and create a new cache
+  manual_data <- ifcb_summarize_biovolumes(
+    file.path(ifcb_path, "features"),
+    manual_folder,
+    class2use_file,
+    file.path(ifcb_path, "data"),
+    mat_recursive = FALSE
+  )
+  
+  # End time and compute runtime
+  end.time <- Sys.time()
+  runtime_manual <- round(end.time - start.time, 2)
+
+  # Save cache with current time and runtime
+  saveRDS(list(data = manual_data, cache_time = Sys.time(), runtime = runtime_manual), cache_path_manual)
+  message("Created new cache for manual data")
+}
 ```
 
 ## Extracting Manual Analysis Date
@@ -758,6 +801,10 @@ for (i in seq_along(params$year)) {
   # Get current class_folder and classifier
   class_folder <- class_folders[[i]]
 
+  if (params$classifier == "Tangesund") {
+    class_folder <- file.path(class_folder, "class2016_v1")
+  }
+  
   # List all files in the class_folder with full path names
   class_files <- list.files(class_folder, full.names = TRUE)
 
@@ -765,7 +812,8 @@ for (i in seq_along(params$year)) {
   classifier <- ifcb_get_mat_variable(class_files[1], "classifierName")[1]
 
   # Replace å in Tångesund
-  classifier <- gsub("\xe5", "å", classifier, useBytes = TRUE)
+  classifier <- gsub("\xe5", "a", classifier, useBytes = TRUE)
+  classifier <- gsub("å", "a", classifier)
   
   # Construct the class_score_file name based on params$threshold and classifier
   if (grepl("mat", classifier)) {
@@ -1006,7 +1054,8 @@ for (i in seq_along(params$year)) {
            classifier_created_by = NA,
            classifier_used = NA,
            metoa = "IMA",
-           associated_media = associated_media_manual)
+           associated_media = associated_media_manual) %>%
+    mutate(verified_by = ifelse(analysis_date > "2024-10-01" & params$classifier == "Tangesund", "Anders Torstensson", verified_by))
   
   # Combine human verified data (manual annotations) with automatic classification
   data_aggregated <- bind_rows(data, data_manual)
@@ -1298,7 +1347,7 @@ for (i in seq_along(params$year)) {
                          "https://github.com/EuropeanIFCBGroup/iRfcb",
                          sep = ", "), # METHOD
            TRAINING_SET_ANNOTATED_BY = ifelse(params$classifier == "Tangesund", "Malin Mohlin", "Ann-Turi Skjevik"),
-           TRAINING_SET = "https://doi.org/10.17044/scilifelab.25883455.v3",
+           TRAINING_SET = "https://doi.org/10.17044/scilifelab.25883455.v4",
            CLASSIFIER_CREATED_BY = data_aggregated_year$classifier_created_by,
            CLASSIFIER_USED = basename(gsub("\\\\", "/", iconv(data_aggregated_year$classifier, from = "Windows-1252", to = "UTF-8"))),
            MANUAL_QC_DATE = as.Date(Sys.Date()),
