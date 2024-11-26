@@ -2,7 +2,7 @@
 author: "Anders Torstensson"
 date: "`r Sys.Date()`"
 params: 
-  classifier: "Baltic" # "Baltic", "Skagerrak-Kattegat" or "Tangesund"
+  classifier: "Skagerrak-Kattegat" # "Baltic", "Skagerrak-Kattegat" or "Tangesund"
   year: [2022, 2023, 2024] # each year separated by comma, e.g. [2022, 2023, 2024]
   threshold: "opt" # MATLAB classifier threshold, "opt", "adhoc" or "none"
   remove_flagged_data: !r c("bubbles", "incomplete", "near land") # What flags should be used for filtering data e.g. c("bubbles", "incomplete", "near land")
@@ -1346,9 +1346,7 @@ for (i in seq_along(params$year)) {
                          "https://github.com/kudelalab/PSD",
                          "https://github.com/EuropeanIFCBGroup/iRfcb",
                          sep = ", "), # METHOD
-           TRAINING_SET_ANNOTATED_BY = ifelse(params$classifier == "Tangesund", "Malin Mohlin", "Ann-Turi Skjevik"),
            TRAINING_SET = "https://doi.org/10.17044/scilifelab.25883455.v4",
-           CLASSIFIER_CREATED_BY = data_aggregated_year$classifier_created_by,
            CLASSIFIER_USED = basename(gsub("\\\\", "/", iconv(data_aggregated_year$classifier, from = "Windows-1252", to = "UTF-8"))),
            MANUAL_QC_DATE = as.Date(Sys.Date()),
            PRE_FILTER_SIZE ="150", # unit um
@@ -1378,9 +1376,6 @@ for (i in seq_along(params$year)) {
       MANUAL_QC_DATE = ifelse(if_any(c(PH_FB, CHL_FB, CDOM_FB, PHYC_FB, PHER_FB, WATERFLOW_FB, TURB_FB,
                                        PCO2_FB, TEMP_FB, PSAL_FB, OSAT_FB, DOXY_FB), ~ !is.na(.x)),
                               NA, MANUAL_QC_DATE),
-      TRAINING_SET_ANNOTATED_BY = ifelse(if_any(c(PH_FB, CHL_FB, CDOM_FB, PHYC_FB, PHER_FB, WATERFLOW_FB, TURB_FB,
-                                                  PCO2_FB, TEMP_FB, PSAL_FB, OSAT_FB, DOXY_FB), ~ !is.na(.x)),
-                                         NA, TRAINING_SET_ANNOTATED_BY),
       TRAINING_SET = ifelse(if_any(c(PH_FB, CHL_FB, CDOM_FB, PHYC_FB, PHER_FB, WATERFLOW_FB, TURB_FB,
                                      PCO2_FB, TEMP_FB, PSAL_FB, OSAT_FB, DOXY_FB), ~ !is.na(.x)),
                             NA, TRAINING_SET),
