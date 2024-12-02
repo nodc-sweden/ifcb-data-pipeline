@@ -10,10 +10,12 @@ This repository contains the SMHI IFCB Data Pipelines, an R-based tool for proce
 - **Quality Control**: Implements automated checks to ensure data accuracy before export.
 - **SHARK Format Export**: Prepares and exports the processed data in the required format for SHARK.
 - **Image Export**: Extracts and archives annotated IFCB images for inclusion in the SMHI IFCB plankton image reference library.
+- **Metadata Export**: Exports metadata to EcoTaxa and IFCB Dashboard.
 
 ## Repository Structure
 - **`ifcb-data-pipeline.Rmd`**: The main RMarkdown file that runs the data pipeline to a standardized SHARK format. Currently placed in the root directory.
 - **`ifcb-image-export-pipeline.Rmd`**: The main RMarkdown file that runs the image export pipeline to the `SMHI IFCB plankton image reference library`. Currently placed in the root directory.
+- **`ifcb-dashboard-metadata-pipeline.Rmd`**: The main RMarkdown file that runs the metadata export pipeline to the IFCB Dashboard. Currently placed in the root directory.
 - **`data/`**: Folder to store input data files.
 - **`output/`**: Folder to store out data files, including HTML reports.
 - **`templates/`**: Folder to store template README files for use in the `ifcb-image-export-pipeline.Rmd`.
@@ -106,6 +108,16 @@ The `ifcb-image-export-pipeline.Rmd` will proceed through the following stages:
 3. **README and Manifest Creation**: Updates README files with image counts and generates a `MANIFEST.txt` for the final output.
 
 This process currently supports multiple classifiers, such as: "Baltic", "Skagerrak-Kattegat", "Tångesund", and "iRfcb" and is essential for updating the [`SMHI IFCB plankton image reference library`](https://doi.org/10.17044/scilifelab.25883455) and EcoTaxa repositories.
+
+### IFCB Dashboard metadata pipeline
+
+The `ifcb-dashboard-metadata-pipeline.Rmd` will proceed through the following stages:
+
+1. **Read metadata**: Reads metadata from `.hdr` files and 'SVEPA'.
+2. **Quality Control**: Performs quality control and adds import flags to dashboard metadata.
+3. **Merge Classified Results**: Merge classified files into a single folder `Baltic-Skagerrak-Kattegat-dashboard` for integration into IFCB Dashboard.
+
+This process currently supports the processing of data across multiple years and offers options for classifying specific quality flags as 'bad samples'.
 
 ## License
 
