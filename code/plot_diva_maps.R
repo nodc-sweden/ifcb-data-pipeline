@@ -17,6 +17,11 @@ julia_command("using DIVAnd")
 data_path <- file.path("multiyear", "SHARK_IFCB_2022_2024_Baltic_SMHI")
 ifcb_path <- Sys.getenv("ifcb_path")
 
+bubbles <- c("D20230920T012944_IFCB134",
+             "D20230920T022246_IFCB134",
+             "D20230920T031550_IFCB134",
+             "D20230920T044707_IFCB134")
+
 # Define taxa
 selected_taxa <- c("Nodularia spumigena", "Aphanizomenon", "Dolichospermum")
 
@@ -27,7 +32,8 @@ data <- read_tsv(file.path(ifcb_path, "shark", data_path, "processed_data", "dat
 data_filtered <- data %>%
   filter(LATNM %in% selected_taxa) %>%
   filter(IMAGE_VERIFICATION == "PredictedByMachine") %>%
-  mutate(YEAR_CRUISE = paste(MYEAR, CRUISE_NO, sep = "_"))
+  mutate(YEAR_CRUISE = paste(MYEAR, CRUISE_NO, sep = "_")) %>%
+  filter(!SMPNO %in% bubbles)
 
 # Get land polygons from Natural Earth
 land_polygons <- ne_countries(scale = "medium", returnclass = "sf")
