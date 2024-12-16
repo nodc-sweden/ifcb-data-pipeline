@@ -2,7 +2,7 @@
 author: "Anders Torstensson"
 date: "`r Sys.Date()`"
 params: 
-  classifier: "Skagerrak-Kattegat" # "Baltic", "Skagerrak-Kattegat" or "Tangesund"
+  classifier: "Baltic" # "Baltic", "Skagerrak-Kattegat" or "Tangesund"
   year: [2022, 2023, 2024] # each year separated by comma, e.g. [2022, 2023, 2024]
   threshold: "opt" # MATLAB classifier threshold, "opt", "adhoc" or "none"
   remove_flagged_data: !r c("bubbles", "incomplete", "near land") # What flags should be used for filtering data e.g. c("bubbles", "incomplete", "near land")
@@ -296,6 +296,13 @@ Here sample time stamps are matched with SVEPA using the [`svepa_event`](https:/
 # Start time
 start.time <- Sys.time()
 
+# Read list with additional cruise numbers
+additional_cruises <- read_tsv("data/cruise_numbers.txt", col_types = cols()) %>%
+  mutate(
+    startdate = as.POSIXct(startdate, format = "%Y-%m-%d %H:%M", tz = "UTC"),
+    stopdate = as.POSIXct(stopdate, format = "%Y-%m-%d %H:%M", tz = "UTC")
+  )
+
 # Initialize a list to store the processed HDR data for each year
 svepa_list <- list()
 
@@ -354,7 +361,17 @@ for (i in seq_along(params$year)) {
       svepa_result <- py$safe_get_svepa_event(svepa_event, "SVEA", timestamp)
       
       if (is.null(svepa_result$id)) {
-        svepa_id <- NA
+        # Convert timestamp to Date object
+        timestamp_datetime <- as.POSIXct(timestamp, format = "%Y%m%d%H%M%S", tz = "UTC")
+        
+        # Find the cruise number from additional resource
+        svepa_id <- additional_cruises %>%
+          filter(timestamp_datetime >= startdate & timestamp_datetime <= stopdate) %>%
+          pull(cruise_no)
+        
+        if (length(svepa_id) == 0) {
+          svepa_id <- NA
+        }
       } else {
         svepa_id <- svepa_result$id
       }
@@ -936,7 +953,8 @@ for (i in seq_along(params$year)) {
   worms_df <- bind_rows(worms_records) %>%
     select(AphiaID, rank, kingdom, phylum, class, order, family, genus) %>%
     rename(worms_kingdom = kingdom, worms_phylum = phylum, worms_class = class, worms_order = order,
-           worms_family = family, worms_genus = genus)
+           worms_family = family, worms_genus = genus) %>%
+    distinct()
   
   # Create class_names data frame with taxa information
   class_names <- data.frame(class = taxa_names,
@@ -1224,7 +1242,7 @@ for (i in seq_along(params$year)) {
   
   # Filter blacklisted data
   data_aggregated_year <- data_aggregated_year %>%
-    filter(!str_detect(sample, blacklist_pattern))
+    filter(!str_detect(pid, blacklist_pattern))
   
   # Function to check if a column is entirely NA
   is_all_na <- function(x) {

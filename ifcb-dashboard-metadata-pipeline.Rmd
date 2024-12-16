@@ -283,6 +283,13 @@ Here sample time stamps are matched with SVEPA using the [`svepa_event`](https:/
 # Start time
 start.time <- Sys.time()
 
+# Read list with additional cruise numbers
+additional_cruises <- read_tsv("data/cruise_numbers.txt", col_types = cols()) %>%
+  mutate(
+    startdate = as.POSIXct(startdate, format = "%Y-%m-%d %H:%M", tz = "UTC"),
+    stopdate = as.POSIXct(stopdate, format = "%Y-%m-%d %H:%M", tz = "UTC")
+  )
+
 # Initialize a list to store the processed HDR data for each year
 svepa_list <- list()
 
@@ -308,7 +315,18 @@ for (i in seq_along(params$year)) {
       svepa_result <- py$safe_get_svepa_event(svepa_event, "SVEA", timestamp)
       
       if (is.null(svepa_result$id)) {
-        svepa_id <- NA
+        # Convert timestamp to Date object
+        timestamp_datetime <- as.POSIXct(timestamp, format = "%Y%m%d%H%M%S", tz = "UTC")
+        
+        # Find the cruise number from additional resource
+        svepa_id <- additional_cruises %>%
+          filter(timestamp_datetime >= startdate & timestamp_datetime <= stopdate) %>%
+          pull(cruise_no)
+        
+        if (length(svepa_id) == 0) {
+          svepa_id <- NA
+        }
+        
       } else {
         svepa_id <- svepa_result$id
       }
