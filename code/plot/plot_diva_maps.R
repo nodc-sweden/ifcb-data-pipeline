@@ -17,11 +17,6 @@ julia_command("using DIVAnd")
 data_path <- file.path("multiyear", "SHARK_IFCB_2022_2024_Baltic_SMHI")
 ifcb_path <- Sys.getenv("ifcb_path")
 
-bubbles <- c("D20230920T012944_IFCB134",
-             "D20230920T022246_IFCB134",
-             "D20230920T031550_IFCB134",
-             "D20230920T044707_IFCB134")
-
 # Define taxa
 selected_taxa <- c("Nodularia spumigena", "Aphanizomenon", "Dolichospermum")
 
@@ -33,7 +28,11 @@ data_filtered <- data %>%
   filter(LATNM %in% selected_taxa) %>%
   filter(IMAGE_VERIFICATION == "PredictedByMachine") %>%
   mutate(YEAR_CRUISE = paste(MYEAR, CRUISE_NO, sep = "_")) %>%
-  filter(!SMPNO %in% bubbles)
+  filter(!is.na(CRUISE_NO))
+
+# Only use SMHI cruises from June, July and August 2023-2024
+data_filtered <- data_filtered %>%
+  filter(YEAR_CRUISE %in% c("2023_011", "2023_012", "2023_013", "2024_013", "2024_016", "2024_017"))
 
 # Get land polygons from Natural Earth
 land_polygons <- ne_countries(scale = "medium", returnclass = "sf")
@@ -130,18 +129,28 @@ for (i in seq_along(unique(data_filtered$YEAR_CRUISE))) {
     julia_assign("mask", mask)
     julia_assign("epsilon2", epsilon2)
     
-    # Run the DIVAnd interpolation in 2D (longitude, latitude)
-    julia_command("fi, s = DIVAndrun(mask, (pm, pn), (xi, yi), (x, y), f, len, epsilon2);")
-    
-    # Call DIVAnd_errormap to get the error map
-    julia_command("e, errormap = DIVAnd_errormap(mask,(pm, pn), (xi, yi), (x, y), f, len, epsilon2, s; method = :cheap, Bscale = false);")
-    
-    fi <- julia_eval("fi")
-    e <- julia_eval("e")
-    
-    interpolated_list[[paste(unique(data_cruise_taxa$YEAR_CRUISE), unique(data_cruise_taxa$LATNM), sep = ";")]] <- fi
+    tryCatch(
+      {
+        # Run the DIVAnd interpolation in 2D (longitude, latitude)
+        julia_command("fi, s = DIVAndrun(mask, (pm, pn), (xi, yi), (x, y), f, len, epsilon2);")
+        
+        # Call DIVAnd_errormap to get the error map
+        julia_command("e, errormap = DIVAnd_errormap(mask, (pm, pn), (xi, yi), (x, y), f, len, epsilon2, s; method = :cheap, Bscale = false);")
+      
+        fi <- julia_eval("fi")
+        e <- julia_eval("e")
+        
+        interpolated_list[[paste(unique(data_cruise_taxa$YEAR_CRUISE), unique(data_cruise_taxa$LATNM), sep = ";")]] <- fi
+        },
+        error = function(e) {
+        # Print the error message (optional)
+        message("Error occurred: ", e$message)
+        
+        # Skip to the next iteration
+        next
+      }
+    )
   }
-  
 }
 
 # Extract cruise numbers
@@ -217,7 +226,7 @@ for (cruise_number in names(grouped_list)) {
     # Add land polygons from rnaturalearth
     geom_sf(data = land_polygons, fill = "#eeeac4", color = "black") +
     # Set color scale for interpolation
-    scale_fill_gradientn(colors = pal, limits = zlim, na.value = "transparent", name = "Biomass (µg C/L)") +
+    scale_fill_gradientn(colors = pal, limits = global_zlim, na.value = "transparent", name = "Biomass (µg C/L)") +
     # Adjust the plot limits based on your longitude and latitude ranges
     coord_sf(xlim = c(min(cruise_data$lon, na.rm = TRUE) - 1, max(cruise_data$lon, na.rm = TRUE) + 1), 
              ylim = c(min(cruise_data$lat, na.rm = TRUE) - 1, max(cruise_data$lat, na.rm = TRUE) + 1), 
@@ -238,7 +247,7 @@ for (cruise_number in names(grouped_list)) {
 }
 
 # Create a directory to save the plots (if it doesn't already exist)
-output_dir <- "plots"
+output_dir <- "plots/summer"
 if (!dir.exists(output_dir)) {
   dir.create(output_dir)
 }
@@ -317,7 +326,7 @@ bucket_plot <- ggplot(bucket_samples_long, aes(x = Lon, y = Lat)) +
 bucket_plot
 
 # Save the plot as a PNG
-ggsave(filename = "plots/plot_2024_016_bucket.png", 
+ggsave(filename = "plots/summer/plot_2024_016_bucket.png", 
        plot = bucket_plot, 
        width = 10, height = 8, dpi = 300,
        bg = "white")
