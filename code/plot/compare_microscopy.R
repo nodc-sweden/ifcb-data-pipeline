@@ -1,6 +1,9 @@
 library(SHARK4R)
 library(tidyverse)
 library(geosphere)
+library(ggOceanMaps)
+library(iRfcb)
+library(ggh4x)
 
 # Define paths
 ifcb_path <- Sys.getenv("ifcb_path")
@@ -20,7 +23,6 @@ shark_data <- get_shark_data(tableView = "sharkdata_phytoplankton",
                              toYear = 2024,
                              fromYear = 2022,
                              dataTypes = "Phytoplankton")
-
 
 # Identify disitinct IFCB samples
 ifcb_samples <- ifcb_data %>%
@@ -68,15 +70,19 @@ nearby_ifcb_samples <- combined_samples %>%
 # Join microscopy data and filter samples that are sampled near IFCB samples
 filtered_shark_data <- shark_data %>%
   left_join(nearby_samples, by = c("sample_longitude_dd", "sample_latitude_dd", "sample_date")) %>%
+  mutate(in_baltic = ifcb_is_in_basin(sample_latitude_dd, sample_longitude_dd)) %>%
   filter(near_ifcb) %>%
   filter(scientific_name %in% ifcb_data$LATNM) %>%
   filter(!station_name == "FARSTAVIKEN") %>%  # Remove the Calluna station
-  filter(!visit_year == 2022)
+  filter(!visit_year == 2022) %>%
+  filter(in_baltic)
+# %>%
+#   filter(!sample_project_name_sv == "PROJ Utsjöprovtagningar Algprognos och Algtoxiner")
 
 # Aggregate size classes and transform measurements into wide format
 shark_data_wide <- filtered_shark_data %>%
-  select(shark_id, visit_year, sample_date, sample_latitude_dd, sample_longitude_dd, scientific_name, size_class, parameter, value) %>%
-  group_by(shark_id, visit_year, sample_date, sample_latitude_dd, sample_longitude_dd, scientific_name, parameter) %>%
+  select(shark_id, visit_year, sample_date, sampler_type_code, sample_latitude_dd, sample_longitude_dd, scientific_name, size_class, parameter, value) %>%
+  group_by(shark_id, visit_year, sample_date, sampler_type_code, sample_latitude_dd, sample_longitude_dd, scientific_name, parameter) %>%
   summarize(value = mean(value, na.rm = TRUE), .groups = "drop") %>%
   pivot_wider(names_from = parameter, values_from = value) %>%
   select(-`# counted`)
@@ -101,9 +107,15 @@ average_ifcb_data <- filtered_ifcb_data %>%
 # Join IFCB and microscopy data in a single dataframe
 joined_data <- average_ifcb_data %>%
   rename(scientific_name = LATNM) %>%
-  left_join(shark_data_wide) %>%
+  full_join(shark_data_wide) %>%
+  group_by(shark_id) %>%
+  fill(visit_year, sample_date, sample_latitude_dd, sample_longitude_dd, .direction = "downup") %>%
+  ungroup() %>%
   filter(scientific_name %in% c("Aphanizomenon", "Dolichospermum", "Nodularia spumigena")) %>%
-  filter(!is.na(sample_date))
+  filter(!is.na(sample_date)) %>%
+  mutate(sampler_type_code = if_else(is.na(sampler_type_code), "NSK", sampler_type_code)) %>%
+  mutate(LATIT = if_else(is.na(LATIT), sample_latitude_dd, LATIT),
+         LONGI = if_else(is.na(LONGI), sample_longitude_dd, LONGI))
 
 # Scatter plot with linear regression line, faceted by scientific_name
 regression_plot <- ggplot(joined_data, aes(x = `Carbon concentration`, y = C_CONC)) +
@@ -137,4 +149,91 @@ regression_plot <- ggplot(joined_data, aes(x = `Carbon concentration`, y = C_CON
 ggsave(filename = "plots/microscopy_comparison_cyanbacteria.png", 
        plot = regression_plot, 
        width = 12, height = 10, dpi = 300,
+       bg = "white")
+
+# Restructure data for sample_type
+joined_data_long <- joined_data %>%
+  select(LATIT, LONGI, scientific_name, sampler_type_code, sample_date, C_CONC, `Carbon concentration`) %>%
+  pivot_longer(
+    cols = c(C_CONC, `Carbon concentration`),
+    names_to = "sample_type",
+    values_to = "carbon_concentration"
+  ) %>%
+  mutate(
+    sample_type = case_when(
+      sample_type == "C_CONC" ~ "IFCB",
+      sample_type == "Carbon concentration" ~ "Microscopy"
+    ),
+    month = format(sample_date, "%B"),  # Extract month name
+    month = factor(
+      month,
+      levels = c("January", "February", "March", "April", "May", "June",
+                 "July", "August", "September", "October", "November", "December")
+    )  # Set custom order for months
+  ) %>%
+  filter(!month %in% c("March", "October", "September")) %>%
+  mutate(sample_depth = if_else(sampler_type_code == "NSK", "Surface", "Integrated 0-10 or 0-20 m")) %>%
+  mutate(sample_depth = if_else(sample_type == "IFCB", "Surface", sample_depth)) %>%
+  distinct() %>%
+  filter(!is.na(carbon_concentration))
+
+# Convert the data to an sf object
+joined_data_sf <- joined_data_long %>%
+  st_as_sf(coords = c("LONGI", "LATIT"), crs = 4326)  # Use WGS84 CRS (EPSG:4326)
+
+# Create basemap
+baltic_sea_map <- basemap(
+  limits = c(min(joined_data_long$LONGI) - 1, max(joined_data_long$LONGI) + 1, min(joined_data_long$LATIT) - 1, max(joined_data_long$LATIT) + 1),
+  land.col = "#eeeac4",
+  land.border.col = "black",
+  rotate = TRUE,
+  bathymetry = FALSE
+)
+
+# Create the faceted map with modified order
+faceted_map <- baltic_sea_map +
+  geom_sf(
+    data = joined_data_sf,
+    aes(
+      size = carbon_concentration,
+      color = sample_depth,         # Color for the border
+      fill = sample_type           # Fill for the interior of the points
+    ),
+    alpha = 0.7,                   # Adjust the transparency for both fill and border
+    shape = 21                     # Set shape to make the points have borders
+  ) +
+  facet_nested(scientific_name ~ month + sample_type,       # Facet columns by month and sample_type
+               nest_line = element_line(colour = "red"),
+  ) +
+  scale_fill_manual(
+    values = c("IFCB" = "#1f77b4",    # Soft blue (for IFCB)
+               "Microscopy" = "#ff7f0e"),  # Orange (for Microscopy)
+    guide = "none"
+  ) +
+  scale_color_manual(
+    values = c("Integrated 0-10 or 0-20 m" = "#2ca02c",    # Green (for Hose)
+               "Surface" = "#d62728")  # Red (for Surface)
+  ) +
+  labs(
+    size = "Carbon Concentration (µg C/L)",
+    fill = "Sample Type",
+    color = "Sample Depth"
+  ) +
+  theme_minimal() +
+  theme(
+    strip.text = element_text(size = 10, face = "bold"),  # Customize facet labels
+    axis.title = element_text(size = 12),                # Axis titles
+    axis.text = element_text(size = 10),                 # Axis text
+    legend.title = element_text(size = 12),              # Legend title
+    legend.text = element_text(size = 10),               # Legend text
+    # panel.spacing = unit(1, "lines"),                    # Adjust spacing between facets
+    legend.position = "bottom",                             # Move legend to the top
+    legend.title.position = "top",                    # Adjust legend title position
+    legend.direction = "horizontal"                      # Horizontal legend layout
+  )
+
+# Save the plot as a PNG
+ggsave(filename = "plots/microscopy_comparison_maps.png", 
+       plot = faceted_map, 
+       width = 10, height = 8, dpi = 300,
        bg = "white")
