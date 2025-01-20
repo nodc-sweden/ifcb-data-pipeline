@@ -3,10 +3,14 @@ library(worrms)
 library(ggOceanMaps)
 library(maps)
 
+# Define paths
+ifcb_path <- Sys.getenv("ifcb_path")
+baltic_path <- file.path("multiyear", "SHARK_IFCB_2022_2024_Baltic_SMHI")
+west_coast_path <- file.path("multiyear", "SHARK_IFCB_2022_2024_Skagerrak-Kattegat_SMHI")
 
-tångesund <- read_tsv("data/SHARK_IFCB_2016_Tångesund_SMHI/processed_data/data.txt")
-baltic <- read_tsv("data/SHARK_IFCB_2022_2024_Baltic_SMHI/processed_data/data.txt")
-sk <- read_tsv("data/SHARK_IFCB_2022_2024_Skagerrak-Kattegat_SMHI/processed_data/data.txt")
+tångesund <- read_tsv(file.path(ifcb_path, "shark", "shark2016_Tangesund_v6/SHARK_IFCB_2016_Tangesund_SMHI", "processed_data", "data.txt"))
+baltic <- read_tsv(file.path(ifcb_path, "shark", baltic_path, "processed_data", "data.txt"))
+sk <- read_tsv(file.path(ifcb_path, "shark", west_coast_path, "processed_data", "data.txt"))
 
 all_data <- rbind(tångesund, baltic, sk)
   
@@ -18,6 +22,25 @@ worms_records <- wm_record(aphia_id)
 
 all_data <- all_data %>%
   left_join(worms_records, by = c("APHIA_ID" = "AphiaID"))
+
+svea_data <- rbind(baltic, sk) %>%
+  left_join(worms_records, by = c("APHIA_ID" = "AphiaID"))
+
+# Count the number of rows for each class
+class_counts_svea <- svea_data %>%
+  filter(IMAGE_VERIFICATION == "PredictedByMachine") %>%
+  mutate(class = ifelse(CLASS_NAME == "Rhizosolenia_Pseudosolenia", "Bacillariophyceae", class)) %>%
+  mutate(class = ifelse(CLASS_NAME == "Cylindrotheca_closterium_Nitzschia_longissima", "Bacillariophyceae", class)) %>%
+  mutate(class = ifelse(CLASS_NAME == "Leptocylindrus_danicus_Leptocylindrus_minimus", "Bacillariophyceae", class)) %>%
+  mutate(class = ifelse(CLASS_NAME == "Gyrosigma_Pleurosigma", "Bacillariophyceae", class)) %>%
+  mutate(class = ifelse(CLASS_NAME == "Heterocapsa_Azadinium", "Dinophyceae", class)) %>%
+  mutate(class = ifelse(CLASS_NAME == "Snowella_Woronichinia", "Cyanophyceae", class)) %>%
+  # filter(!is.na(class)) %>%
+  group_by(class) %>%
+  summarise(count = n())
+
+svea_machine_obs <- svea_data %>%
+  filter(IMAGE_VERIFICATION == "PredictedByMachine")
 
 # Count the number of rows for each class
 class_counts <- all_data %>%
