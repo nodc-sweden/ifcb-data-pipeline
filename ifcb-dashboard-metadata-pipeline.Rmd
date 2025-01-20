@@ -3,7 +3,7 @@ author: "Anders Torstensson"
 date: "`r Sys.Date()`"
 params: 
   dataset: "Svea" # "Svea" or "Tangesund"
-  year: [2022, 2023, 2024] # each year separated by comma, e.g. [2022, 2023, 2024]
+  year: [2025] # each year separated by comma, e.g. [2022, 2023, 2024]
   remove_flagged_data: !r c("bubbles", "incomplete", "near land") # What flags should be used for filtering data e.g. c("bubbles", "incomplete", "near land")
   class_score_version: 1
   save_psd_plots: FALSE
@@ -588,7 +588,13 @@ for (i in seq_along(params$year)) {
   positions <- coordinate_check_list[[as.character(params$year[i])]]
   ferrybox_data <- ferrbyox_data_list[[as.character(params$year[i])]]
   cruise_numbers <- svepa_list[[as.character(params$year[i])]]
-
+  bad_samples <- blacklist %>%
+    filter(grepl(paste0("^D", params$year[i]), sample)) %>%
+    select(sample) %>%
+    rename(pid = sample) %>%
+    mutate(qc_bad = TRUE,
+           skip = TRUE)
+    
   # Join metadata
   metadata <- date_info %>%
     left_join(qflags_select, by = "sample") %>%
@@ -606,7 +612,8 @@ for (i in seq_along(params$year)) {
            skip = str_detect(pid, blacklist_pattern),
            sample_type = ifelse(params$dataset == "Tangesund", "cast", "underway"),
            cruise = paste0("SVEA_", year, "_", cruise_number)) %>%
-    select(-gpsLatitude, -cruise_number, -gpsLongitude, -flag, -year, -ifcb_number)
+    select(-gpsLatitude, -cruise_number, -gpsLongitude, -flag, -year, -ifcb_number) %>%
+    bind_rows(bad_samples)
   
   # Use actual depths for Tångesund and remove cruise numbers
   if (params$dataset == "Tangesund") {
