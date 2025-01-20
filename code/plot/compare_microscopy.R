@@ -4,6 +4,10 @@ library(geosphere)
 library(ggOceanMaps)
 library(iRfcb)
 library(ggh4x)
+library(sf)
+
+# Set locale to English
+Sys.setlocale("LC_TIME", "en_US.UTF-8")
 
 # Define paths
 ifcb_path <- Sys.getenv("ifcb_path")
@@ -18,11 +22,23 @@ data_west_coast <- read_tsv(file.path(ifcb_path, "shark", west_coast_path, "proc
 ifcb_data <- rbind(data_baltic, data_west_coast) %>%
   filter(IMAGE_VERIFICATION == "PredictedByMachine")
 
+# Define path to SHARK download file
+shark_phytoplankton_file <- "data/shark/shark_phytoplankton_2022_2024.txt"
+
 # Download Phytoplankton data from SHARK
-shark_data <- get_shark_data(tableView = "sharkdata_phytoplankton",
-                             toYear = 2024,
-                             fromYear = 2022,
-                             dataTypes = "Phytoplankton")
+if (file.exists(shark_phytoplankton_file)) {
+  shark_data <- read_tsv(shark_phytoplankton_file,
+                         progress = FALSE,
+                         col_types = cols(),
+                         guess_max = 10^6)
+} else {
+  shark_data <- get_shark_data(tableView = "sharkdata_phytoplankton",
+                               toYear = 2024,
+                               fromYear = 2022,
+                               dataTypes = "Phytoplankton",
+                               save_data = TRUE,
+                               file_path = shark_phytoplankton_file)
+}
 
 # Identify disitinct IFCB samples
 ifcb_samples <- ifcb_data %>%
@@ -222,6 +238,7 @@ faceted_map <- baltic_sea_map +
   theme_minimal() +
   theme(
     strip.text = element_text(size = 10, face = "bold"),  # Customize facet labels
+    strip.text.y.right = element_text(size = 10, face = "italic"),
     axis.title = element_text(size = 12),                # Axis titles
     axis.text = element_text(size = 10),                 # Axis text
     legend.title = element_text(size = 12),              # Legend title
