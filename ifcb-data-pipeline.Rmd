@@ -2,12 +2,12 @@
 author: "Anders Torstensson"
 date: "`r Sys.Date()`"
 params: 
-  classifier: "Baltic" # "Baltic", "Skagerrak-Kattegat" or "Tangesund"
-  year: [2022, 2023, 2024] # each year separated by comma, e.g. [2022, 2023, 2024]
+  classifier: "Skagerrak-Kattegat" # "Baltic", "Skagerrak-Kattegat" or "Tangesund"
+  year: [2025] # each year separated by comma, e.g. [2022, 2023, 2024]
   threshold: "opt" # MATLAB classifier threshold, "opt", "adhoc" or "none"
   remove_flagged_data: !r c("bubbles", "incomplete", "near land") # What flags should be used for filtering data e.g. c("bubbles", "incomplete", "near land")
   regional: TRUE # If output should only contain data from the classifier region, e.g. Baltic data for the Baltic classifier
-  multiyear_delivery: TRUE # Include all years in a single data delivery
+  multiyear_delivery: FALSE # Include all years in a single data delivery
   f1_threshold: 0.9 # Remove classes below threshold this, not currently used
  
 output: html_document
@@ -1076,7 +1076,11 @@ for (i in seq_along(params$year)) {
     mutate(verified_by = ifelse(analysis_date > "2024-10-01" & params$classifier == "Tangesund", "Anders Torstensson", verified_by))
   
   # Combine human verified data (manual annotations) with automatic classification
-  data_aggregated <- bind_rows(data, data_manual)
+  if (nrow(data_manual) > 0) {
+    data_aggregated <- bind_rows(data, data_manual)
+  } else {
+    data_aggregated <- data
+  }
 
   # Combine with ferrybox data, remove data with bad data flags (3 and above)
   data_aggregated <- data_aggregated %>%
@@ -1290,12 +1294,15 @@ for (i in seq_along(params$year)) {
                   ~ na_if(.x, 0))) %>% # Replace 0 values with NA
     distinct() %>%
     filter(!if_all(c(ph, chl, cdom, pc, pe, waterflow, turb, pco2, 
-                     watertemp, salinity, oxygen_saturation, oxygen_ml_l), is.na))
+                     watertemp, salinity, oxygen_saturation, oxygen_ml_l), is.na)) %>%
+    select(pid, ph, chl, cdom, pc, pe, waterflow, turb, pco2, watertemp, salinity, oxygen_saturation, oxygen_ml_l) %>%
+    distinct()
   
   # Remove unclassified from main data frame and bind with unclassified and ferrybox data
   data_aggregated_year <- data_aggregated_year %>%
     filter(!class_clean == "unclassified") %>%
-    bind_rows(unclassified, ferrybox) %>%
+    bind_rows(unclassified) %>%
+    left_join(ferrybox, by = "pid") %>%
     arrange(verification, sample, class_clean)
   
   # Retrieve column names for Shark database integration
