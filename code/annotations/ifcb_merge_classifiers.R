@@ -6,16 +6,16 @@ ifcb_py_install(envname = ".virtualenvs/iRfcb")
 ifcb_path <- Sys.getenv("ifcb_path")
 
 # Name the new, merged dataset (folder and class2use names)
-merged_dataset_name <- "test"
+merged_dataset_name <- "Skagerrak-Kattegat-Tangesund"
 
 # Define paths to class2use files
 class2use_file_base <- file.path(ifcb_path, "config", "class2use_Skagerrak-Kattegat.mat")
-class2use_file_additions <- file.path(ifcb_path, "config", "class2use_Tångesund.mat")
+class2use_file_additions <- file.path(ifcb_path, "config", "class2use_Tangesund.mat")
 class2use_file_combined <- file.path(ifcb_path, "config", paste0("class2use_", merged_dataset_name, ".mat"))
 
 # Define paths to manual folders
 manual_folder_base <- file.path(ifcb_path, "manual", "Skagerrak-Kattegat")
-manual_folder_additions <- file.path(ifcb_path, "manual", "Tångesund")
+manual_folder_additions <- file.path(ifcb_path, "manual", "Tangesund")
 manual_folder_combined <- file.path(ifcb_path, "manual", merged_dataset_name)
 
 # Merge the datasets
