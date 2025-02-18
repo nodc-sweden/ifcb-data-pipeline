@@ -4,6 +4,10 @@ library(geosphere)
 library(ggOceanMaps)
 library(iRfcb)
 library(ggh4x)
+library(sf)
+
+# Set locale to English
+Sys.setlocale("LC_TIME", "en_US.UTF-8")
 
 # Define paths
 ifcb_path <- Sys.getenv("ifcb_path")
@@ -18,11 +22,23 @@ data_west_coast <- read_tsv(file.path(ifcb_path, "shark", west_coast_path, "proc
 ifcb_data <- rbind(data_baltic, data_west_coast) %>%
   filter(IMAGE_VERIFICATION == "PredictedByMachine")
 
+# Define path to SHARK download file
+shark_phytoplankton_file <- "data/shark/shark_phytoplankton_2022_2024.txt"
+
 # Download Phytoplankton data from SHARK
-shark_data <- get_shark_data(tableView = "sharkdata_phytoplankton",
-                             toYear = 2024,
-                             fromYear = 2022,
-                             dataTypes = "Phytoplankton")
+if (file.exists(shark_phytoplankton_file)) {
+  shark_data <- read_tsv(shark_phytoplankton_file,
+                         progress = FALSE,
+                         col_types = cols(),
+                         guess_max = 10^6)
+} else {
+  shark_data <- get_shark_data(tableView = "sharkdata_phytoplankton",
+                               toYear = 2024,
+                               fromYear = 2022,
+                               dataTypes = "Phytoplankton",
+                               save_data = TRUE,
+                               file_path = shark_phytoplankton_file)
+}
 
 # Identify disitinct IFCB samples
 ifcb_samples <- ifcb_data %>%
@@ -195,45 +211,56 @@ faceted_map <- baltic_sea_map +
   geom_sf(
     data = joined_data_sf,
     aes(
-      size = carbon_concentration,
-      color = sample_depth,         # Color for the border
-      fill = sample_type           # Fill for the interior of the points
+      size = carbon_concentration,    # Still use carbon_concentration, but scale it manually
+      color = sample_depth,           # Color for the border
+      fill = sample_type              # Fill for the interior of the points
     ),
-    alpha = 0.7,                   # Adjust the transparency for both fill and border
-    shape = 21                     # Set shape to make the points have borders
+    alpha = 0.7,                     # Adjust the transparency for both fill and border
+    shape = 21,                      # Set shape to make the points have borders
+    stroke = 1.5
+  ) +
+  scale_size_continuous(
+    range = c(6, 20),
+    guide = guide_legend(direction = "horizontal")  # Make the size guide horizontal
   ) +
   facet_nested(scientific_name ~ month + sample_type,       # Facet columns by month and sample_type
-               nest_line = element_line(colour = "red"),
+               nest_line = element_line(colour = "red")
   ) +
   scale_fill_manual(
     values = c("IFCB" = "#1f77b4",    # Soft blue (for IFCB)
                "Microscopy" = "#ff7f0e"),  # Orange (for Microscopy)
-    guide = "none"
+    guide = guide_legend(override.aes = list(size = 6),
+                         direction = "vertical")
   ) +
   scale_color_manual(
     values = c("Integrated 0-10 or 0-20 m" = "#2ca02c",    # Green (for Hose)
-               "Surface" = "#d62728")  # Red (for Surface)
+               "Surface" = "#d62728"),  # Red (for Surface)
+    guide = guide_legend(override.aes = list(size = 6),
+                         direction = "vertical")  # Make the color guide vertical
   ) +
   labs(
-    size = "Carbon Concentration (µg C/L)",
-    fill = "Sample Type",
-    color = "Sample Depth"
+    size = "Carbon concentration (µg C/L)",
+    fill = "Sample type",
+    color = "Sample depth",
+    x = "Longitude",
+    y = "Latitude"
   ) +
   theme_minimal() +
   theme(
-    strip.text = element_text(size = 10, face = "bold"),  # Customize facet labels
+    strip.text = element_text(size = 14, face = "bold"),  # Customize facet labels
+    strip.text.y.right = element_text(size = 14, face = "italic"),
     axis.title = element_text(size = 12),                # Axis titles
-    axis.text = element_text(size = 10),                 # Axis text
+    axis.text = element_text(size = 12),                 # Axis text
     legend.title = element_text(size = 12),              # Legend title
-    legend.text = element_text(size = 10),               # Legend text
-    # panel.spacing = unit(1, "lines"),                    # Adjust spacing between facets
-    legend.position = "bottom",                             # Move legend to the top
-    legend.title.position = "top",                    # Adjust legend title position
-    legend.direction = "horizontal"                      # Horizontal legend layout
-  )
+    legend.text = element_text(size = 12),               # Legend text
+    legend.position = "bottom",                          # Move legend to the bottom
+    legend.title.position = "top",                       # Adjust legend title position
+    legend.direction = "horizontal"                      # Horizontal legend layout for size
+  ) +
+  guides(shape = guide_legend(override.aes = list(size = 5)))
 
 # Save the plot as a PNG
-ggsave(filename = "plots/microscopy_comparison_maps.png", 
+ggsave(filename = "plots/microscopy_comparison_maps2.png", 
        plot = faceted_map, 
-       width = 10, height = 8, dpi = 300,
+       width = 15, height = 12, dpi = 300,
        bg = "white")

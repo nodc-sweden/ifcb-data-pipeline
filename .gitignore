@@ -55,6 +55,9 @@ rsconnect/
 # Shapefiles
 data/shapefiles/*/
 
+# SHARK data
+data/shark/*.txt
+
 # Output
 output/html_reports/*.html
 output/*.txt
