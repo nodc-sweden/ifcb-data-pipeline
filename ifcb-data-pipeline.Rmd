@@ -2,12 +2,12 @@
 author: "Anders Torstensson"
 date: "`r Sys.Date()`"
 params: 
-  classifier: "Skagerrak-Kattegat" # "Baltic", "Skagerrak-Kattegat" or "Tangesund"
-  year: [2025] # each year separated by comma, e.g. [2022, 2023, 2024]
+  classifier: "Baltic" # "Baltic", "Skagerrak-Kattegat", "Tangesund" or "Skagerrak-Kattegat-Tangesund"
+  year: [2022, 2023, 2024] # each year separated by comma, e.g. [2022, 2023, 2024]
   threshold: "opt" # MATLAB classifier threshold, "opt", "adhoc" or "none"
   remove_flagged_data: !r c("bubbles", "incomplete", "near land") # What flags should be used for filtering data e.g. c("bubbles", "incomplete", "near land")
   regional: TRUE # If output should only contain data from the classifier region, e.g. Baltic data for the Baltic classifier
-  multiyear_delivery: FALSE # Include all years in a single data delivery
+  multiyear_delivery: TRUE # Include all years in a single data delivery
   f1_threshold: 0.9 # Remove classes below threshold this, not currently used
  
 output: html_document
@@ -38,6 +38,7 @@ knitr::opts_chunk$set(echo = TRUE)
 knit.time <- Sys.time()
 
 # Load required libraries
+library(SHARK4R)
 library(iRfcb)
 library(tidyverse)
 library(worrms)
@@ -951,7 +952,7 @@ for (i in seq_along(params$year)) {
 
   # Select relevant information from WoRMS
   worms_df <- bind_rows(worms_records) %>%
-    select(AphiaID, rank, kingdom, phylum, class, order, family, genus) %>%
+    select(AphiaID, scientificname, rank, kingdom, phylum, class, order, family, genus, parentNameUsageID) %>%
     rename(worms_kingdom = kingdom, worms_phylum = phylum, worms_class = class, worms_order = order,
            worms_family = family, worms_genus = genus) %>%
     distinct()
@@ -992,6 +993,31 @@ for (i in seq_along(params$year)) {
     select(-rank, -worms_kingdom, -worms_phylum, 
            -worms_order, -worms_family, -worms_genus)
 
+  # Find all taxa classified with cf.
+  cf_taxa <- class_names %>%
+    filter(sflag == "CF")
+  
+  parent_ids <- unique(cf_taxa$parentNameUsageID)[!is.na(unique(cf_taxa$parentNameUsageID))]
+  
+  # Extract parent records from cf. classes
+  parent_records <- get_worms_records(parent_ids) %>%
+    select(AphiaID, scientificname) %>%
+    rename(parentNameUsageID = AphiaID,
+           parentName = scientificname)
+  
+  # Replace scientific names for cf. taxa with the parent names
+  class_names <- class_names %>%
+    left_join(parent_records, by = "parentNameUsageID") %>%
+    mutate(scientificname_merge = parentName) %>%
+    mutate(scientificname_merge = coalesce(scientificname_merge, scientificname)) %>%
+    mutate(scientificname_merge = coalesce(scientificname_merge, class_clean)) %>%
+    mutate(aphia_id_merge = ifelse(is.na(parentName), NA, parentNameUsageID)) %>%
+    mutate(aphia_id_merge = coalesce(aphia_id_merge, aphia_id)) %>%
+    mutate(sflag = ifelse(sflag == "CF", NA, sflag)) %>%
+    select(-aphia_id, -scientificname, -parentName, -parentNameUsageID) %>%
+    rename(aphia_id = aphia_id_merge,
+           scientificname = scientificname_merge)
+  
   # Store class_names in the list
   class_names_list[[as.character(params$year[i])]] <- class_names
 }
@@ -1076,11 +1102,7 @@ for (i in seq_along(params$year)) {
     mutate(verified_by = ifelse(analysis_date > "2024-10-01" & params$classifier == "Tangesund", "Anders Torstensson", verified_by))
   
   # Combine human verified data (manual annotations) with automatic classification
-  if (nrow(data_manual) > 0) {
-    data_aggregated <- bind_rows(data, data_manual)
-  } else {
-    data_aggregated <- data
-  }
+  data_aggregated <- bind_rows(data, data_manual)
 
   # Combine with ferrybox data, remove data with bad data flags (3 and above)
   data_aggregated <- data_aggregated %>%
@@ -1253,26 +1275,37 @@ for (i in seq_along(params$year)) {
     all(is.na(x))
   }
   
-  # Extract unclassified data
+  # Extract unclassified data and ferrybox data
   unclassified <- data_aggregated_year %>%
     filter(class_clean == "unclassified") %>%
-    select(sample, pid, classifier, counts, ml_analyzed, counts_per_liter, biovolume_mm3_per_liter, depth, timestamp,
-           date, year, month, day, time, ifcb_number, platform, flag, gpsLatitude, gpsLongitude, near_land, in_baltic, 
-           basin, analysis_date, cruise_number, verification, verified_by,
-           classifier_created_by, classifier_used, metoa, associated_media) %>%
+    select(-worms_class, -class_clean, -aphia_id, -sflag, -trophic_type, -is_diatom, -biovolume_mm3, -carbon_ug, 
+           -class, -precision, -detection_probability, -miss_probability, -f1, -carbon_ug_per_liter) %>%
     rename(unclassified_counts = counts,
            unclassified_abundance = counts_per_liter,
-           unclassified_volume = biovolume_mm3_per_liter)
+           unclassified_volume = biovolume_mm3_per_liter,
+           ph = `70`,
+           chl = `8063`,
+           cdom = `8165`,
+           pc = `8173`,
+           pe = `8166`,
+           waterflow = `8172`,
+           turb = `8174`,
+           pco2 = `8177`,
+           watertemp = `8179`,
+           salinity = `8181`,
+           oxygen_saturation = `8190`,
+           oxygen_ml_l = `8191`) %>%
+  mutate(across(all_of(intersect(c("ph", "chl", "cdom", "pc", "pe", 
+                                   "waterflow", "turb", "pco2", "oxygen_saturation"), 
+                                 names(.)[!sapply(., is_all_na)])),
+                ~ na_if(.x, -999))) %>% # Replace -999 values with NA
+  mutate(across(all_of(intersect(c("ph", "pco2"), 
+                                 names(.)[!sapply(., is_all_na)])),
+                ~ na_if(.x, 0))) # Replace 0 values with NA
   
-  # Extract ferrybox data
-  ferrybox <- data_aggregated_year %>%
-    select(-worms_class, -class_clean, -aphia_id, -sflag, -trophic_type, -is_diatom, -biovolume_mm3,
-           -carbon_ug, -metoa, -class, -precision, -detection_probability, -miss_probability, -f1, 
-           -carbon_ug_per_liter, -counts, -counts_per_liter, -biovolume_mm3_per_liter, -ml_analyzed, 
-           -flag, -analysis_date, -verification, -platform, -classifier_created_by, -classifier_used, -classifier,
-           -associated_media, -verified_by, -species_flag_taxon_name) %>%
-    mutate(platform = "SveaFB",
-           analysis_date = date) %>%
+  # Remove unclassified from main data frame and bind with unclassified and ferrybox data
+  data_aggregated_year <- data_aggregated_year %>%
+    filter(!class_clean == "unclassified") %>%
     rename(ph = `70`,
            chl = `8063`,
            cdom = `8165`,
@@ -1285,25 +1318,8 @@ for (i in seq_along(params$year)) {
            salinity = `8181`,
            oxygen_saturation = `8190`,
            oxygen_ml_l = `8191`) %>%
-    mutate(across(all_of(intersect(c("ph", "chl", "cdom", "pc", "pe", 
-                                     "waterflow", "turb", "pco2", "oxygen_saturation"), 
-                                   names(.)[!sapply(., is_all_na)])),
-                  ~ na_if(.x, -999))) %>% # Replace -999 values with NA
-    mutate(across(all_of(intersect(c("ph", "pco2"), 
-                                   names(.)[!sapply(., is_all_na)])),
-                  ~ na_if(.x, 0))) %>% # Replace 0 values with NA
-    distinct() %>%
-    filter(!if_all(c(ph, chl, cdom, pc, pe, waterflow, turb, pco2, 
-                     watertemp, salinity, oxygen_saturation, oxygen_ml_l), is.na)) %>%
-    select(pid, ph, chl, cdom, pc, pe, waterflow, turb, pco2, watertemp, salinity, oxygen_saturation, oxygen_ml_l) %>%
-    distinct()
-  
-  # Remove unclassified from main data frame and bind with unclassified and ferrybox data
-  data_aggregated_year <- data_aggregated_year %>%
-    filter(!class_clean == "unclassified") %>%
     bind_rows(unclassified) %>%
-    left_join(ferrybox, by = "pid") %>%
-    arrange(verification, sample, class_clean)
+    arrange(desc(verification), sample, class_clean)
   
   # Retrieve column names for Shark database integration
   shark_col <- ifcb_get_shark_colnames()
@@ -1336,17 +1352,17 @@ for (i in seq_along(params$year)) {
            LONGI = data_aggregated_year$gpsLongitude,
            POSYS = "GPS",
            PDMET = ifelse(params$classifier == "Tangesund", "SEP", "MIX"),
-           METFP = "None",
+           METFP = "NON",
            IFCBNO	= data_aggregated_year$ifcb_number,
            MPROG = "PROJ",
            MNDEP = depth,
            MXDEP = depth,
            SLABO = "SMHI",
            ACKR_SMP = "N",
-           SMTYP = ifelse(params$classifier == "Tangesund", NA, "FerryBox"),
+           SMTYP = ifelse(params$classifier == "Tangesund", "IFCB", "FerryBox"),
            SMVOL = round(data_aggregated_year$ml_analyzed, 3), # VOLUME
            SMPNO = data_aggregated_year$pid, # SAMPLE NAME
-           LATNM = data_aggregated_year$class_clean, # SPECIES
+           LATNM = data_aggregated_year$scientificname, # SPECIES
            SFLAG = data_aggregated_year$sflag, # SP or SPP
            LATNM_SFLAG = data_aggregated_year$species_flag_taxon_name,
            TRPHY = data_aggregated_year$trophic_type,
@@ -1390,34 +1406,13 @@ for (i in seq_along(params$year)) {
            PSAL_FB = round(data_aggregated_year$salinity, 4),
            OSAT_FB = round(data_aggregated_year$oxygen_saturation, 4),
            DOXY_FB = round(data_aggregated_year$oxygen_ml_l, 4)
-    ) %>%
-    mutate(
-      PRE_FILTER_SIZE = ifelse(if_any(c(PH_FB, CHL_FB, CDOM_FB, PHYC_FB, PHER_FB, WATERFLOW_FB, TURB_FB,
-                                        PCO2_FB, TEMP_FB, PSAL_FB, OSAT_FB, DOXY_FB), ~ !is.na(.x)),
-                               NA, PRE_FILTER_SIZE),
-      IFCBNO = ifelse(if_any(c(PH_FB, CHL_FB, CDOM_FB, PHYC_FB, PHER_FB, WATERFLOW_FB, TURB_FB,
-                               PCO2_FB, TEMP_FB, PSAL_FB, OSAT_FB, DOXY_FB), ~ !is.na(.x)),
-                      NA, IFCBNO),
-      MANUAL_QC_DATE = ifelse(if_any(c(PH_FB, CHL_FB, CDOM_FB, PHYC_FB, PHER_FB, WATERFLOW_FB, TURB_FB,
-                                       PCO2_FB, TEMP_FB, PSAL_FB, OSAT_FB, DOXY_FB), ~ !is.na(.x)),
-                              NA, MANUAL_QC_DATE),
-      TRAINING_SET = ifelse(if_any(c(PH_FB, CHL_FB, CDOM_FB, PHYC_FB, PHER_FB, WATERFLOW_FB, TURB_FB,
-                                     PCO2_FB, TEMP_FB, PSAL_FB, OSAT_FB, DOXY_FB), ~ !is.na(.x)),
-                            NA, TRAINING_SET),
-      METDC = ifelse(if_any(c(PH_FB, CHL_FB, CDOM_FB, PHYC_FB, PHER_FB, WATERFLOW_FB, TURB_FB,
-                              PCO2_FB, TEMP_FB, PSAL_FB, OSAT_FB, DOXY_FB), ~ !is.na(.x)),
-                     NA, METDC),
-      CLASSPROG = ifelse(if_any(c(PH_FB, CHL_FB, CDOM_FB, PHYC_FB, PHER_FB, WATERFLOW_FB, TURB_FB,
-                                  PCO2_FB, TEMP_FB, PSAL_FB, OSAT_FB, DOXY_FB), ~ !is.na(.x)),
-                         NA, CLASSPROG),
-      METOA = ifelse(if_any(c(PH_FB, CHL_FB, CDOM_FB, PHYC_FB, PHER_FB, WATERFLOW_FB, TURB_FB,
-                              PCO2_FB, TEMP_FB, PSAL_FB, OSAT_FB, DOXY_FB), ~ !is.na(.x)),
-                     NA, METOA),
-      PDMET = ifelse(if_any(c(PH_FB, CHL_FB, CDOM_FB, PHYC_FB, PHER_FB, WATERFLOW_FB, TURB_FB,
-                              PCO2_FB, TEMP_FB, PSAL_FB, OSAT_FB, DOXY_FB), ~ !is.na(.x)),
-                     NA, PDMET),
-      MANUAL_QC_DATE = as.Date(MANUAL_QC_DATE)
-    )
+    ) 
+  
+  # Remove samples that do not have ferrybox data (i.e. pump was probably turned off)
+  if (!params$classifier == "Tangesund") {
+    shark_df <- shark_df %>%
+      filter(!is.na(WATERFLOW_FB))
+  }
   
   # Store shark_df for the current year in the list
   shark_dfs[[as.character(params$year[i])]] <- shark_df
@@ -1472,15 +1467,15 @@ if (params$multiyear_delivery) {
   # Define delivery note content as a character vector for current year
   delivery_note_content <- c(
     paste("provtagningsår:", paste(min(params$year), max(params$year), sep = "-")),
-    "datatyp: IFCB",
+    "datatyp: Plankton Imaging",
     "rapporterande institut: SMHI",
     paste("rapporteringsdatum:", Sys.Date()),
     "kontaktperson: Anders Torstensson",
-    "format: Phytoplankton:PP_SMHI",
+    "format: PlanktonImaging:IFCB_SMHI",
     "data kontrollerad av: Leverantör",
-    "övervakningsprogram:",
+    "övervakningsprogram: PROJ",
     "beställare: SMHI",
-    "projekt:",
+    "projekt: IFCB, DTO, JERICO",
     "kommentarer:",
     "status: test"
   )
@@ -1539,15 +1534,15 @@ for (i in seq_along(params$year)) {
   # Define delivery note content as a character vector for current year
   delivery_note_content <- c(
     paste("provtagningsår:", params$year[i]),
-    "datatyp: IFCB",
+    "datatyp: Plankton Imaging",
     "rapporterande institut: SMHI",
     paste("rapporteringsdatum:", Sys.Date()),
     "kontaktperson: Anders Torstensson",
-    "format: Phytoplankton:PP_SMHI",
+    "format: PlanktonImaging:IFCB_SMHI",
     "data kontrollerad av: Leverantör",
-    "övervakningsprogram:",
+    "övervakningsprogram: PROJ",
     "beställare: SMHI",
-    "projekt:",
+    "projekt: IFCB, DTO, JERICO",
     "kommentarer:",
     "status: test"
   )
