@@ -1278,7 +1278,7 @@ for (i in seq_along(params$year)) {
   # Extract unclassified data and ferrybox data
   unclassified <- data_aggregated_year %>%
     filter(class_clean == "unclassified") %>%
-    select(-worms_class, -class_clean, -aphia_id, -sflag, -trophic_type, -is_diatom, -biovolume_mm3, -carbon_ug, 
+    select(-worms_class, -class_clean, -scientificname, -species_flag_taxon_name, -aphia_id, -sflag, -trophic_type, -is_diatom, -biovolume_mm3, -carbon_ug, 
            -class, -precision, -detection_probability, -miss_probability, -f1, -carbon_ug_per_liter) %>%
     rename(unclassified_counts = counts,
            unclassified_abundance = counts_per_liter,
