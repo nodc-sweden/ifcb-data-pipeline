@@ -115,6 +115,7 @@ Here, we define the file paths needed for exporting IFCB data. These paths inclu
 # Edit the .Renviron by usethis::edit_r_environ("project")
 ifcb_path <- Sys.getenv("ifcb_path")
 ferrybox_path <- Sys.getenv("ferrybox_path")
+havgem_path <- Sys.getenv("havgem_path")
 
 # Initialize list to store paths for each year
 feature_folders <- list()
@@ -180,6 +181,7 @@ blacklist <- read_tsv("data/sample_blacklist.tsv", col_types = cols())
 # Create a regex pattern by joining all blacklist samples with `|`
 blacklist_pattern <- paste(blacklist$sample, collapse = "|")
 ```
+
 
 ## Reading HDR Data
 
@@ -712,6 +714,42 @@ if (!params$dataset == "Tangesund") {
 }
 ```
 
+## Count annotations
+
+In this step, we count the number of annotated images for each classifier and exports data into a .txt file, facilitating image annotation.
+
+```{r count_mat_annotation}
+# Start time
+start.time <- Sys.time()
+
+# Define the different classifiers
+classifiers <- c("Baltic", "Skagerrak-Kattegat", "smhi_niva")
+
+# Count the manual annotations and save as .txt
+for (classifier in classifiers) {
+  class_counts <- ifcb_count_mat_annotations(file.path(ifcb_path, "manual", classifier),
+                                             file.path(ifcb_path, "config", paste0("class2use_", classifier, ".mat")),
+                                             skip_class = 1)
+  
+  class_counts <- arrange(class_counts, desc(n))
+  
+  out_path <- file.path(havgem_path, "annotation", Sys.Date())
+  
+  if (!dir.exists(out_path)) {
+    dir.create(out_path, recursive = TRUE)
+  }
+  
+  write_tsv(class_counts,
+            file.path(out_path, paste0("class_counts_", classifier, "_", Sys.Date(), ".txt")),
+            na = "")
+  
+}
+
+# End time
+end.time <- Sys.time()
+runtime_mat_count <- round(end.time - start.time, 2)
+```
+
 ## Summarize Runtimes
 This section provides a summary of the time taken to run various parts of the script, such as extracting HDR data, analyzing particle size distribution, and generating the entire report. This helps in identifying the computational efficiency of the pipeline.
 
@@ -719,9 +757,10 @@ This section provides a summary of the time taken to run various parts of the sc
 runtime_variables <- c("running the whole script",
                        "extracting HDR data",
                        "extracting cruise numbers",
-                       "analysing PSD")
+                       "analysing PSD",
+                       "counting manual annotations")
 
-runtime_values <- c(runtime_knit, runtime_hdr, runtime_svepa, runtime_psd)
+runtime_values <- c(runtime_knit, runtime_hdr, runtime_svepa, runtime_psd, runtime_mat_count)
 
 for (i in seq_along(runtime_variables)) {
   cat("Time taken for ", runtime_variables[i], ": ", round(runtime_values[i]/3600, 2), "h", "\n", sep = "")
