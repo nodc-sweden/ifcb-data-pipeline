@@ -942,13 +942,14 @@ for (i in seq_along(params$year)) {
   taxa_names_clean <- trimws(taxa_names_clean)
 
   # Retrieve worms records with retry mechanism
-  worms_records <- iRfcb:::retrieve_worms_records(taxa_names_clean,
-                                                  max_retries = 5,
-                                                  sleep_time = 60,
-                                                  marine_only = FALSE)
+  worms_records <- ifcb_match_taxa_names(taxa_names_clean,
+                                         max_retries = 5,
+                                         sleep_time = 60,
+                                         marine_only = FALSE,
+                                         verbose = FALSE)
 
   # Extract Aphia IDs and class names from WoRMS
-  aphia_id <- sapply(worms_records, iRfcb:::extract_aphia_id)
+  aphia_id <- worms_records$AphiaID
 
   # Select relevant information from WoRMS
   worms_df <- bind_rows(worms_records) %>%
