@@ -343,14 +343,15 @@ for (classifier in seq_along(params$classifier[!grepl("iRfcb", params$classifier
   taxa_names_clean <- trimws(taxa_names_clean)
 
   # Retrieve worms records with retry mechanism
-  worms_records <- iRfcb:::retrieve_worms_records(taxa_names_clean,
-                                                  max_retries = 5,
-                                                  sleep_time = 60,
-                                                  marine_only = FALSE)
+  worms_records <- ifcb_match_taxa_names(taxa_names_clean,
+                                         max_retries = 5,
+                                         sleep_time = 60,
+                                         marine_only = FALSE,
+                                         verbose = FALSE)
 
   # Extract Aphia IDs and class names from WoRMS
-  aphia_id <- sapply(worms_records, iRfcb:::extract_aphia_id)
-  classes <- sapply(worms_records, iRfcb:::extract_class)
+  aphia_id <- worms_records$AphiaID
+  classes <- worms_records$class
 
   # Create class_names data frame with taxa information
   class_names <- data.frame(subfolder = taxa_names,
