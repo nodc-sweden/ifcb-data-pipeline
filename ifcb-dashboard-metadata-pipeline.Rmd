@@ -617,6 +617,10 @@ for (i in seq_along(params$year)) {
     select(-gpsLatitude, -cruise_number, -gpsLongitude, -flag, -year, -ifcb_number) %>%
     bind_rows(bad_samples)
   
+  # Compile metadata for taxonomist
+  metadata_annotation <- metadata %>%
+    select(pid, in_baltic, basin, near_land, flag, cruise_number)
+  
   # Use actual depths for Tångesund and remove cruise numbers
   if (params$dataset == "Tangesund") {
     metadata_db <- metadata_db %>%
@@ -629,13 +633,28 @@ for (i in seq_along(params$year)) {
   if (!dir.exists(dashboard_metadata_folder)) {
     dir.create(dashboard_metadata_folder, recursive = TRUE)
   }
-  
+
   # Define file path for the output CSV
   csv_file_path <- file.path(dashboard_metadata_folder, paste0("ifcb_dashboard_metadata_", params$dataset, "_", params$year[i], ".csv"))
   
   # Write Dashboard metadata
   write_csv(metadata_db,
             csv_file_path,
+            na = "")
+  
+    
+  out_path <- file.path(havgem_path, "annotation", Sys.Date())
+  
+  if (!dir.exists(out_path)) {
+    dir.create(out_path, recursive = TRUE)
+  }
+  
+  # Define file path for the output CSV
+  txt_file_path <- file.path(out_path, paste0("ifcb_sample_metadata_", params$dataset, "_", params$year[i], ".txt"))
+  
+  # Write Dashboard metadata
+  write_tsv(metadata_annotation,
+            txt_file_path,
             na = "")
   
   # Output message showing the file path of the saved CSV
