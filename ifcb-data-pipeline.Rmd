@@ -3,11 +3,11 @@ author: "Anders Torstensson"
 date: "`r Sys.Date()`"
 params: 
   classifier: "Baltic" # "Baltic", "Skagerrak-Kattegat", "Tangesund" or "Skagerrak-Kattegat-Tangesund"
-  year: [2022, 2023, 2024] # each year separated by comma, e.g. [2022, 2023, 2024]
+  year: [2025] # each year separated by comma, e.g. [2022, 2023, 2024]
   threshold: "opt" # MATLAB classifier threshold, "opt", "adhoc" or "none"
   remove_flagged_data: !r c("bubbles", "incomplete", "near land") # What flags should be used for filtering data e.g. c("bubbles", "incomplete", "near land")
   regional: TRUE # If output should only contain data from the classifier region, e.g. Baltic data for the Baltic classifier
-  multiyear_delivery: TRUE # Include all years in a single data delivery
+  multiyear_delivery: FALSE # Include all years in a single data delivery
   f1_threshold: 0.9 # Remove classes below threshold this, not currently used
  
 output: html_document
@@ -458,7 +458,8 @@ for (i in seq_along(params$year)) {
     hdr_folder = data_folder,
     micron_factor = 1 / 3.4,
     diatom_class = "Bacillariophyceae",
-    threshold = params$threshold
+    threshold = params$threshold,
+    use_python = FALSE,
   )
 
   # Store the summarized biovolume data in the list
@@ -520,7 +521,8 @@ if (file.exists(cache_path_manual)) {
       manual_folder,
       class2use_file,
       file.path(ifcb_path, "data"),
-      mat_recursive = FALSE
+      mat_recursive = FALSE,
+      use_python = FALSE
     )
 
     # End time and compute runtime
@@ -538,7 +540,8 @@ if (file.exists(cache_path_manual)) {
     manual_folder,
     class2use_file,
     file.path(ifcb_path, "data"),
-    mat_recursive = FALSE
+    mat_recursive = FALSE,
+    use_python = FALSE
   )
   
   # End time and compute runtime
@@ -1103,7 +1106,12 @@ for (i in seq_along(params$year)) {
     mutate(verified_by = ifelse(analysis_date > "2024-10-01" & params$classifier == "Tangesund", "Anders Torstensson", verified_by))
   
   # Combine human verified data (manual annotations) with automatic classification
-  data_aggregated <- bind_rows(data, data_manual)
+  if (nrow(data_manual) > 0) {
+    data_aggregated <- bind_rows(data, data_manual)
+  } else {
+    data_aggregated <- data
+  }
+  
 
   # Combine with ferrybox data, remove data with bad data flags (3 and above)
   data_aggregated <- data_aggregated %>%
