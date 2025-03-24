@@ -213,9 +213,14 @@ for (i in seq_along(params$year)) {
              gpsLongitude = 11.49300)
   } else {
    
-    # Keep only relevant information
+    # Keep only relevant information and NA coordinate if fix is older than 10 minutes
     hdr_data <- all_hdr_data %>%
-      select(sample, gpsLatitude, gpsLongitude, timestamp, date, year, month, day, time, ifcb_number)
+      select(sample, gpsLatitude, gpsLongitude, timestamp, date, year, month, day, time, ifcb_number, gpsTimeFromFix) %>%
+      mutate(gpsTimeFromFix = as.POSIXct(gpsTimeFromFix, format = "%b/%d/%Y %H:%M:%OS", tz = "UTC")) %>%
+      mutate(gpsLatitude = ifelse(abs(difftime(gpsTimeFromFix, timestamp, units = "mins")) > 10, NA, gpsLatitude),
+             gpsLongitude = ifelse(abs(difftime(gpsTimeFromFix, timestamp, units = "mins")) > 10, NA, gpsLongitude)
+      ) %>%
+      select(-gpsTimeFromFix)
   }
 
   # Identify rows in hdr_data where the year is not 2016 and GPS latitude or longitude is missing
