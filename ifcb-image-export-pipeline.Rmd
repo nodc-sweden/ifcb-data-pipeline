@@ -174,7 +174,11 @@ for (classifier in seq_along(params$classifier[!grepl("iRfcb", params$classifier
   # Add position to Tångesund data
   metadata <- metadata  %>%
       mutate(gpsLatitude = ifelse(ifcb_number == "IFCB110" & year == 2016, 58.07500, gpsLatitude),
-             gpsLongitude = ifelse(ifcb_number == "IFCB110" & year == 2016, 11.49300, gpsLongitude))
+             gpsLongitude = ifelse(ifcb_number == "IFCB110" & year == 2016, 11.49300, gpsLongitude)) %>%
+      mutate(gpsTimeFromFix = as.POSIXct(gpsTimeFromFix, format = "%b/%d/%Y %H:%M:%OS", tz = "UTC")) %>%
+      mutate(gpsLatitude = ifelse(abs(difftime(gpsTimeFromFix, timestamp, units = "mins")) > 10, NA, gpsLatitude),
+             gpsLongitude = ifelse(abs(difftime(gpsTimeFromFix, timestamp, units = "mins")) > 10, NA, gpsLongitude)
+      )
   
   # Identify rows in hdr_data where the year is not 2016 and GPS latitude or longitude is missing
   missing_position <- metadata %>%
