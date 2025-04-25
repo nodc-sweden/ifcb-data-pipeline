@@ -67,11 +67,11 @@ The IFCB data folder, containing results processed by the `ifcb-analysis` MATLAB
 3. **Install necessary packages**:  
    In R: Ensure you have the required R packages installed by running:
    ```r
-   install.packages(c("tidyverse", "worrms", "knitr", "rmarkdown", "leaflet", 
-                      "htmltools", "patchwork", "reticulate"))
+   install.packages(c("iRfcb", "tidyverse", "worrms", "knitr", "rmarkdown",  
+                      "leaflet", "htmltools", "patchwork", "reticulate"))
    
-   # install.packages("devtools")
-   devtools::install_github("EuropeanIFCBGroup/iRfcb", dependencies = TRUE)
+   # install.packages("remotes")
+   remotes::install_github("sharksmhi/SHARK4R", dependencies = TRUE)
    ```
    
 4. <a name="step-4"></a> **Edit environmental variables**:  
