@@ -46,7 +46,7 @@ library(patchwork)
 library(reticulate)
 
 # Installing the required Python dependencies in a specified virtual environment for the 'iRfcb' package
-ifcb_py_install(envname = ".virtualenvs/iRfcb")
+# ifcb_py_install(envname = ".virtualenvs/iRfcb")
 
 # Install svepa_event from Github to access Svea cruise numbers
 py_install("git+https://github.com/nodc-sweden/svepa_event.git", pip = TRUE)
