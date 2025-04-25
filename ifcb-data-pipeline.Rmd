@@ -3,7 +3,7 @@ author: "Anders Torstensson"
 date: "`r Sys.Date()`"
 params: 
   classifier: "Baltic" # "Baltic", "Skagerrak-Kattegat", "Tangesund" or "Skagerrak-Kattegat-Tangesund"
-  year: [2025] # each year separated by comma, e.g. [2022, 2023, 2024]
+  year: [2024] # each year separated by comma, e.g. [2022, 2023, 2024]
   threshold: "opt" # MATLAB classifier threshold, "opt", "adhoc" or "none"
   remove_flagged_data: !r c("bubbles", "incomplete", "near land") # What flags should be used for filtering data e.g. c("bubbles", "incomplete", "near land")
   regional: TRUE # If output should only contain data from the classifier region, e.g. Baltic data for the Baltic classifier
@@ -49,7 +49,7 @@ library(patchwork)
 library(reticulate)
 
 # Installing the required Python dependencies in a specified virtual environment for the 'iRfcb' package
-ifcb_py_install(envname = ".virtualenvs/iRfcb")
+# ifcb_py_install(envname = ".virtualenvs/iRfcb")
 
 # Install svepa_event from Github to access Svea cruise numbers
 py_install("git+https://github.com/nodc-sweden/svepa_event.git", pip = TRUE)
@@ -465,6 +465,7 @@ for (i in seq_along(params$year)) {
     diatom_class = "Bacillariophyceae",
     threshold = params$threshold,
     use_python = FALSE,
+    verbose = FALSE
   )
 
   # Store the summarized biovolume data in the list
@@ -527,7 +528,8 @@ if (file.exists(cache_path_manual)) {
       class2use_file,
       file.path(ifcb_path, "data"),
       mat_recursive = FALSE,
-      use_python = FALSE
+      use_python = FALSE,
+      verbose = FALSE
     )
 
     # End time and compute runtime
