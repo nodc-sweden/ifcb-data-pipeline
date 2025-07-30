@@ -7,6 +7,7 @@ params:
   remove_flagged_data: !r c("bubbles", "incomplete", "near land") # What flags should be used for filtering data e.g. c("bubbles", "incomplete", "near land")
   class_score_version: 1
   save_psd_plots: FALSE
+  run_psd: TRUE
 
 output: html_document
 knit: (function(inputFile, encoding) {
@@ -180,6 +181,9 @@ blacklist <- read_tsv("data/sample_blacklist.tsv", col_types = cols())
 
 # Create a regex pattern by joining all blacklist samples with `|`
 blacklist_pattern <- paste(blacklist$sample, collapse = "|")
+
+# Initialize a list to store PSD results for each year
+psd_list <- list()
 ```
 
 
@@ -366,12 +370,9 @@ sample_depth <- read_csv("data/tangesund_depthdata.csv", col_types = cols()) %>%
 ## Quality Control: Particle Size Distribution (PSD)
 In the PSD quality control step, we calculate the particle size distribution for each year's data according to Hayashi et al., in prep. This involves determining various parameters such as bead size, bubble presence, and biomass, ensuring that the data meets quality standards.
 
-```{r psd_check, include=TRUE, results = 'hide', echo=TRUE, message=FALSE}
+```{r psd_check, eval=params$run_psd, include=TRUE, results = 'hide', echo=TRUE, message=FALSE}
 # Start time
 start.time <- Sys.time()
-
-# Initialize a list to store PSD results for each year
-psd_list <- list()
 
 for (i in seq_along(params$year)) {
 
@@ -418,13 +419,12 @@ for (i in seq_along(params$year)) {
 # End time
 end.time <- Sys.time()
 runtime_psd <- round(end.time - start.time, 2)
-runtime_knit <- round(end.time - knit.time, 2)
 ```
 
 ## Displaying PSD Summary
 This section prints a summary of the PSD results for each year. The summary includes a table that groups the quality flags (Q-flags) by their type and shows the number of samples associated with each flag.
 
-```{r psd_print, include=TRUE, results='asis'}
+```{r psd_print, eval=params$run_psd, include=TRUE, results='asis'}
 for (i in seq_along(params$year)) {
   # Print PSD summary
   print(psd_list[[as.character(params$year[i])]]$flags %>%
@@ -492,9 +492,15 @@ date_info_list <- list()
 for (i in seq_along(params$year)) {
 
   # Get current PSD flags and positions data
-  psd_flags <- psd_list[[as.character(params$year[i])]]$flags
   positions <- coordinate_check_list[[as.character(params$year[i])]]
 
+  if (!is.null(psd_list[[as.character(params$year[i])]])) {
+    psd_flags <- psd_list[[as.character(params$year[i])]]$flags
+  } else {
+    # Create an empty fallback with at least a 'sample' column so join works
+    psd_flags <- tibble(sample = character(), flag = character())
+  }
+  
   # Join psd$flags with positions data by "sample", add near_land_qflag, unite into flag, convert to sentence case
   qflags <- psd_flags %>%
     full_join(positions, by = "sample") %>%
@@ -772,6 +778,7 @@ for (classifier in classifiers) {
 # End time
 end.time <- Sys.time()
 runtime_mat_count <- round(end.time - start.time, 2)
+runtime_knit <- round(end.time - knit.time, 2)
 ```
 
 ## Summarize Runtimes
