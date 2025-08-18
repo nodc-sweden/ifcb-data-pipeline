@@ -105,6 +105,11 @@ if (!file.exists(shapefile_path)) {
 } else {
   message("Shapefile already exists. No download needed.")
 }
+
+# Set runtime of PSD to NA if PSD is not run
+if (!run_psd) {
+  runtime_psd <- NA
+}
 ```
 
 ## Data Export Paths
