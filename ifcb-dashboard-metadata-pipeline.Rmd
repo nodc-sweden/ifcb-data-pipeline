@@ -107,7 +107,7 @@ if (!file.exists(shapefile_path)) {
 }
 
 # Set runtime of PSD to NA if PSD is not run
-if (!run_psd) {
+if (!params$run_psd) {
   runtime_psd <- NA
 }
 ```
