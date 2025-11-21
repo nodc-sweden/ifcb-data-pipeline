@@ -87,7 +87,7 @@ for (src_folder in source_folders) {
   # --------------------------------------------------------
   # Detect large files and log them
   # --------------------------------------------------------
-  sizes <- file_info(files)$size
+  sizes <- file.size(files)
   large_files_idx <- which(sizes > size_threshold)
 
   if (length(large_files_idx) > 0) {
@@ -152,7 +152,7 @@ matched_roi <- tibble(file = roi_files) %>%
   pull(file)
 
 # Check file sizes
-file_sizes <- file.info(matched_roi)$size
+file_sizes <- file.size(matched_roi)
 
 # Identify bins with 0 KB files
 empty_bins <- unique(str_extract(matched_roi[file_sizes == 0], "D\\d{8}T\\d{6}_IFCB\\d+"))
