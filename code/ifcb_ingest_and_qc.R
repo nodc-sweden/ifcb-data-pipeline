@@ -8,13 +8,16 @@ Sys.setenv(USE_IRFCB_PYTHON = FALSE)
 # Load libraries
 # -------------------------------
 
-library(readr)
-library(fs)
-library(reticulate)
-library(iRfcb)
-library(tools)
-library(dplyr)
-library(stringr)
+suppressPackageStartupMessages({
+  library(readr, quietly = TRUE)
+  library(fs, quietly = TRUE)
+  library(reticulate, quietly = TRUE)
+  library(iRfcb, quietly = TRUE)
+  library(tools, quietly = TRUE)
+  library(dplyr, quietly = TRUE)
+  library(stringr, quietly = TRUE)
+  library(lubridate, quietly = TRUE)
+})
 
 # -------------------------------
 # Configuration
@@ -23,22 +26,28 @@ library(stringr)
 year <- as.numeric(format(Sys.Date(), "%Y"))
 ifcb_path <- Sys.getenv("ifcb_path")
 ifcb_base_path <- Sys.getenv("ifcb_base_path")
-repo_dir <- "C:/R/ifcb-data-pipeline/"
+repo_dir <- "C:/R/ifcb-data-pipeline"
 
 feature_folder <- file.path(ifcb_path, "features", "v4", year)
 blobs_folder <- file.path(ifcb_path, "blobs", "v4", year)
 delivery_dir <- file.path(ifcb_base_path, "delivery", year)
 raw_folder <- file.path(ifcb_path, "data", year)
 psd_plot_folder <- file.path(ifcb_path, "psd", "figures", year)
+metadata_folder <- file.path(ifcb_path, "ifcbdb_metadata")
 
 blacklist_file <- file.path(repo_dir, "data", "sample_blacklist.tsv")
 log_file <- file.path(repo_dir, "large_bins_log.txt")
 psd_data_file <- file.path(ifcb_path, "psd", paste0("psd_", year, "_data.csv"))
 psd_fits_file <- file.path(ifcb_path, "psd", paste0("psd_", year, "_fits.csv"))
 psd_flags_file <- file.path(ifcb_path, "psd", paste0("psd_", year, "_flags.csv"))
+metadata_file <- file.path(metadata_folder, paste0("ifcb_dashboard_metadata_Svea_", year, ".csv"))
+cruise_number_file <- file.path(repo_dir, "data", "cruise_numbers.txt")
 
 # File size threshold: 1 GB
 size_threshold <- 1073741824  # bytes
+
+# Define which PSD flags to flag in IFCB Dashboard metadata as 'skip'
+skip_flags <- c("Bubbles", "Incomplete Run", "Beads")
 
 # -------------------------------
 # Copy new delivery files
@@ -61,7 +70,7 @@ for (src_folder in source_folders) {
 
   # Skip folder if already exists in destination
   if (dir_exists(dest_folder)) {
-    message("Skipping existing folder: ", folder_name)
+    # message("Skipping existing folder: ", folder_name)
     next
   }
 
@@ -126,15 +135,6 @@ for (src_folder in source_folders) {
 # v4 Feature extraction
 # -------------------------------
 
-# Use venv
-use_virtualenv(file.path(repo_dir, "venv"))
-
-# Add root repo to sys.path
-py_run_string("import sys; sys.path.append('C:/R/ifcb-data-pipeline/code/python/ifcb-features')")
-
-# Import function to extract all features
-extract_slim_features <- import("extract_slim_features")
-
 # List already extracted feature files
 feature_files <- list.files(feature_folder, ".csv")
 feature_bins <- sub("^([^_]*_[^_]*)_.*$", "\\1", feature_files)
@@ -146,8 +146,32 @@ roi_bins <- tools::file_path_sans_ext(basename(roi_files))
 # Skip already processed bins
 bins_to_process <- roi_bins[!roi_bins %in% feature_bins]
 
+# Match ROI files for the bins
+matched_roi <- tibble(file = roi_files) %>%
+  filter(str_detect(file, str_c(bins_to_process, collapse = "|"))) %>%
+  pull(file)
+
+# Check file sizes
+file_sizes <- file.info(matched_roi)$size
+
+# Identify bins with 0 KB files
+empty_bins <- unique(str_extract(matched_roi[file_sizes == 0], "D\\d{8}T\\d{6}_IFCB\\d+"))
+
+# Remove empty bins from bins_to_process
+bins_to_process <- setdiff(bins_to_process, empty_bins)
+
 # Only extract features if there a any new files to process
 if (length(bins_to_process) > 0) {
+  
+  # Use venv
+  use_virtualenv(file.path(repo_dir, "venv"))
+  
+  # Add root repo to sys.path
+  py_run_string("import sys; sys.path.append('C:/R/ifcb-data-pipeline/code/python/ifcb-features')")
+  
+  # Import function to extract all features
+  extract_slim_features <- import("extract_slim_features")
+  
   # Extract v4 features
   extract_slim_features$extract_and_save_all_features(as.character(raw_folder),
                                                       as.character(feature_folder),
@@ -193,36 +217,111 @@ if (file.exists(psd_flags_file)) {
 # Keep only bins whose timestamp is NOT in processed_bins
 bins_to_psd <- roi_bins[!roi_bins %in% processed_bins]
 
-# Calculate the particle size distribution (PSD) using IFCB data from the specified folders
-psd <- ifcb_psd(feature_folder = feature_folder,
-                hdr_folder = raw_folder,
-                bins = bins_to_psd,
-                save_data = FALSE,
-                output_file = NULL,
-                plot_folder = psd_plot_folder,
-                use_marker = FALSE,
-                start_fit = 15,
-                r_sqr = 0.5,
-                beads = 10 ** 20,
-                bubbles = 110,
-                incomplete = c(1500, 3),
-                missing_cells = 0.5,
-                biomass = 3000,
-                bloom = 10,
-                humidity = 75,
-                micron_factor = 1/2.77,
-                fea_v = 4,
-                use_plot_subfolders = FALSE)
+# Remove empty bins from bins_to_process
+bins_to_psd <- setdiff(bins_to_psd, empty_bins)
 
-# Bind data
-psd_data <- bind_rows(psd_data, psd$data)
-psd_fits <- bind_rows(psd_fits, psd$fits)
-psd_flags <- bind_rows(psd_flags, psd$flags)
+if (length(bins_to_psd) > 0) {
+  
+  # Use venv
+  use_virtualenv(file.path(repo_dir, "venv"))
+  
+  # Calculate the particle size distribution (PSD) using IFCB data from the specified folders
+  psd <- ifcb_psd(feature_folder = feature_folder,
+                  hdr_folder = raw_folder,
+                  bins = bins_to_psd,
+                  save_data = FALSE,
+                  output_file = NULL,
+                  plot_folder = psd_plot_folder,
+                  use_marker = FALSE,
+                  start_fit = 15,
+                  r_sqr = 0.5,
+                  beads = 10 ** 20,
+                  bubbles = 110,
+                  incomplete = c(1500, 3),
+                  missing_cells = 0.5,
+                  biomass = 3000,
+                  bloom = 10,
+                  humidity = 75,
+                  micron_factor = 1/2.77,
+                  fea_v = 4,
+                  use_plot_subfolders = FALSE)
+  
+  # Bind data
+  psd_data <- bind_rows(psd_data, psd$data)
+  psd_fits <- bind_rows(psd_fits, psd$fits)
+  psd_flags <- bind_rows(psd_flags, psd$flags)
+  
+  # Store PSD results
+  write_csv(psd_flags, psd_flags_file, progress = FALSE)
+  write_csv(psd_fits, psd_fits_file, progress = FALSE)
+  write_csv(psd_data, psd_data_file, progress = FALSE)
+}
 
-# Store PSD results
-write_csv(psd_flags, psd_flags_file, progress = FALSE)
-write_csv(psd_fits, psd_fits_file, progress = FALSE)
-write_csv(psd_data, psd_data_file, progress = FALSE)
+# -------------------------------
+# Append metadata with new data
+# -------------------------------
+
+if (length(bins_to_process) > 0) {
+  # Read current metadata file
+  if (file.exists(metadata_file)) {
+    metadata <- read_csv(metadata_file, col_types = cols(), progress = FALSE)
+  } else {
+    metadata <- data.frame()
+  }
+  
+  # Read list with additional cruise numbers
+  additional_cruises <- read_tsv(cruise_number_file, col_types = cols(), progress = FALSE) %>%
+    mutate(
+      startdate = as.POSIXct(startdate, format = "%Y-%m-%d %H:%M", tz = "UTC"),
+      stopdate = as.POSIXct(stopdate, format = "%Y-%m-%d %H:%M", tz = "UTC")
+    )
+  
+  # Extract date from bins_to_process
+  bin_dates <- tibble(
+    pid = bins_to_process,
+    date = ymd(str_sub(bins_to_process, 2, 9))
+  )
+  
+  # Join each bin to the corresponding cruise number
+  bin_cruises <- bin_dates %>%
+    rowwise() %>%
+    mutate(
+      cruise_no = additional_cruises$cruise_no[
+        which(date >= additional_cruises$startdate & date <= additional_cruises$stopdate)
+      ][1]  # take first match if multiple
+    ) %>%
+    ungroup() %>%
+    mutate(cruise_no = paste0("SVEA_", year, "_", cruise_no))
+  
+  # Retrieve GPS postion from HDR files
+  hdr_data <- ifcb_read_hdr_data(file.path(raw_folder, 
+                                           str_extract(bins_to_process, "^D\\d{8}"), 
+                                           paste0(bins_to_process, ".hdr")),
+                                 gps_only = TRUE,
+                                 verbose = FALSE)
+  
+  # Add position and PSD flags to metadata
+  bins_metadata <- bin_cruises %>%
+    left_join(hdr_data, by = c("pid" = "sample")) %>%
+    left_join(psd_flags, by = c("pid" = "sample")) %>%
+    rename(latitude = gpsLatitude,
+           longitude = gpsLongitude,
+           cruise = cruise_no) %>%
+    mutate(depth = 4,
+           qc_bad = ifelse(flag %in% skip_flags, TRUE, FALSE),
+           skip = ifelse(flag %in% skip_flags, TRUE, FALSE),
+           sample_type = "underway") %>%
+    select(pid, latitude, longitude, depth, qc_bad, skip, sample_type, cruise)
+  
+  # Append to metadata
+  metadata_db <- bind_rows(metadata, bins_metadata) %>%
+    filter(!str_detect(pid, "^D\\d{8}$"))
+  
+  # Write Dashboard metadata
+  write_csv(metadata_db,
+            metadata_file,
+            na = "")
+}
 
 # -------------------------------
 # Log successful completion
