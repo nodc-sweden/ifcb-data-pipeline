@@ -7,6 +7,7 @@ params:
   remove_flagged_data: !r c("bubbles", "incomplete", "near land") # What flags should be used for filtering data e.g. c("bubbles", "incomplete", "near land")
   class_score_version: 1
   save_psd_plots: FALSE
+  run_psd: TRUE
 
 output: html_document
 knit: (function(inputFile, encoding) {
@@ -46,7 +47,7 @@ library(patchwork)
 library(reticulate)
 
 # Installing the required Python dependencies in a specified virtual environment for the 'iRfcb' package
-ifcb_py_install(envname = ".virtualenvs/iRfcb")
+# ifcb_py_install(envname = ".virtualenvs/iRfcb")
 
 # Install svepa_event from Github to access Svea cruise numbers
 py_install("git+https://github.com/nodc-sweden/svepa_event.git", pip = TRUE)
@@ -104,6 +105,11 @@ if (!file.exists(shapefile_path)) {
 } else {
   message("Shapefile already exists. No download needed.")
 }
+
+# Set runtime of PSD to NA if PSD is not run
+if (!params$run_psd) {
+  runtime_psd <- NA
+}
 ```
 
 ## Data Export Paths
@@ -115,6 +121,7 @@ Here, we define the file paths needed for exporting IFCB data. These paths inclu
 # Edit the .Renviron by usethis::edit_r_environ("project")
 ifcb_path <- Sys.getenv("ifcb_path")
 ferrybox_path <- Sys.getenv("ferrybox_path")
+havgem_path <- Sys.getenv("havgem_path")
 
 # Initialize list to store paths for each year
 feature_folders <- list()
@@ -179,7 +186,11 @@ blacklist <- read_tsv("data/sample_blacklist.tsv", col_types = cols())
 
 # Create a regex pattern by joining all blacklist samples with `|`
 blacklist_pattern <- paste(blacklist$sample, collapse = "|")
+
+# Initialize a list to store PSD results for each year
+psd_list <- list()
 ```
+
 
 ## Reading HDR Data
 
@@ -211,9 +222,14 @@ for (i in seq_along(params$year)) {
              gpsLongitude = 11.49300)
   } else {
    
-    # Keep only relevant information
+    # Keep only relevant information and NA coordinate if fix is older than 10 minutes
     hdr_data <- all_hdr_data %>%
-      select(sample, gpsLatitude, gpsLongitude, timestamp, date, year, month, day, time, ifcb_number)
+      select(sample, gpsLatitude, gpsLongitude, timestamp, date, year, month, day, time, ifcb_number, gpsTimeFromFix) %>%
+      mutate(gpsTimeFromFix = as.POSIXct(gpsTimeFromFix, format = "%b/%d/%Y %H:%M:%OS", tz = "UTC")) %>%
+      mutate(gpsLatitude = ifelse(abs(difftime(gpsTimeFromFix, timestamp, units = "mins")) > 10, NA, gpsLatitude),
+             gpsLongitude = ifelse(abs(difftime(gpsTimeFromFix, timestamp, units = "mins")) > 10, NA, gpsLongitude)
+      ) %>%
+      select(-gpsTimeFromFix)
   }
 
   # Identify rows in hdr_data where the year is not 2016 and GPS latitude or longitude is missing
@@ -359,12 +375,9 @@ sample_depth <- read_csv("data/tangesund_depthdata.csv", col_types = cols()) %>%
 ## Quality Control: Particle Size Distribution (PSD)
 In the PSD quality control step, we calculate the particle size distribution for each year's data according to Hayashi et al., in prep. This involves determining various parameters such as bead size, bubble presence, and biomass, ensuring that the data meets quality standards.
 
-```{r psd_check, include=TRUE, results = 'hide', echo=TRUE, message=FALSE}
+```{r psd_check, eval=params$run_psd, include=TRUE, results = 'hide', echo=TRUE, message=FALSE}
 # Start time
 start.time <- Sys.time()
-
-# Initialize a list to store PSD results for each year
-psd_list <- list()
 
 for (i in seq_along(params$year)) {
 
@@ -411,13 +424,12 @@ for (i in seq_along(params$year)) {
 # End time
 end.time <- Sys.time()
 runtime_psd <- round(end.time - start.time, 2)
-runtime_knit <- round(end.time - knit.time, 2)
 ```
 
 ## Displaying PSD Summary
 This section prints a summary of the PSD results for each year. The summary includes a table that groups the quality flags (Q-flags) by their type and shows the number of samples associated with each flag.
 
-```{r psd_print, include=TRUE, results='asis'}
+```{r psd_print, eval=params$run_psd, include=TRUE, results='asis'}
 for (i in seq_along(params$year)) {
   # Print PSD summary
   print(psd_list[[as.character(params$year[i])]]$flags %>%
@@ -485,9 +497,15 @@ date_info_list <- list()
 for (i in seq_along(params$year)) {
 
   # Get current PSD flags and positions data
-  psd_flags <- psd_list[[as.character(params$year[i])]]$flags
   positions <- coordinate_check_list[[as.character(params$year[i])]]
 
+  if (!is.null(psd_list[[as.character(params$year[i])]])) {
+    psd_flags <- psd_list[[as.character(params$year[i])]]$flags
+  } else {
+    # Create an empty fallback with at least a 'sample' column so join works
+    psd_flags <- tibble(sample = character(), flag = character())
+  }
+  
   # Join psd$flags with positions data by "sample", add near_land_qflag, unite into flag, convert to sentence case
   qflags <- psd_flags %>%
     full_join(positions, by = "sample") %>%
@@ -615,6 +633,10 @@ for (i in seq_along(params$year)) {
     select(-gpsLatitude, -cruise_number, -gpsLongitude, -flag, -year, -ifcb_number) %>%
     bind_rows(bad_samples)
   
+  # Compile metadata for taxonomist
+  metadata_annotation <- metadata %>%
+    select(pid, in_baltic, basin, near_land, flag, cruise_number)
+  
   # Use actual depths for Tångesund and remove cruise numbers
   if (params$dataset == "Tangesund") {
     metadata_db <- metadata_db %>%
@@ -627,13 +649,28 @@ for (i in seq_along(params$year)) {
   if (!dir.exists(dashboard_metadata_folder)) {
     dir.create(dashboard_metadata_folder, recursive = TRUE)
   }
-  
+
   # Define file path for the output CSV
   csv_file_path <- file.path(dashboard_metadata_folder, paste0("ifcb_dashboard_metadata_", params$dataset, "_", params$year[i], ".csv"))
   
   # Write Dashboard metadata
   write_csv(metadata_db,
             csv_file_path,
+            na = "")
+  
+    
+  out_path <- file.path(havgem_path, "annotation", Sys.Date())
+  
+  if (!dir.exists(out_path)) {
+    dir.create(out_path, recursive = TRUE)
+  }
+  
+  # Define file path for the output CSV
+  txt_file_path <- file.path(out_path, paste0("ifcb_sample_metadata_", params$dataset, "_", params$year[i], ".txt"))
+  
+  # Write Dashboard metadata
+  write_tsv(metadata_annotation,
+            txt_file_path,
             na = "")
   
   # Output message showing the file path of the saved CSV
@@ -712,6 +749,43 @@ if (!params$dataset == "Tangesund") {
 }
 ```
 
+## Count annotations
+
+In this step, we count the number of annotated images for each classifier and exports data into a .txt file, facilitating image annotation.
+
+```{r count_mat_annotation}
+# Start time
+start.time <- Sys.time()
+
+# Define the different classifiers
+classifiers <- c("Baltic", "Skagerrak-Kattegat", "smhi_niva")
+
+# Count the manual annotations and save as .txt
+for (classifier in classifiers) {
+  class_counts <- ifcb_count_mat_annotations(file.path(ifcb_path, "manual", classifier),
+                                             file.path(ifcb_path, "config", paste0("class2use_", classifier, ".mat")),
+                                             skip_class = 1)
+  
+  class_counts <- arrange(class_counts, desc(n))
+  
+  out_path <- file.path(havgem_path, "annotation", Sys.Date())
+  
+  if (!dir.exists(out_path)) {
+    dir.create(out_path, recursive = TRUE)
+  }
+  
+  write_tsv(class_counts,
+            file.path(out_path, paste0("class_counts_", classifier, "_", Sys.Date(), ".txt")),
+            na = "")
+  
+}
+
+# End time
+end.time <- Sys.time()
+runtime_mat_count <- round(end.time - start.time, 2)
+runtime_knit <- round(end.time - knit.time, 2)
+```
+
 ## Summarize Runtimes
 This section provides a summary of the time taken to run various parts of the script, such as extracting HDR data, analyzing particle size distribution, and generating the entire report. This helps in identifying the computational efficiency of the pipeline.
 
@@ -719,9 +793,10 @@ This section provides a summary of the time taken to run various parts of the sc
 runtime_variables <- c("running the whole script",
                        "extracting HDR data",
                        "extracting cruise numbers",
-                       "analysing PSD")
+                       "analysing PSD",
+                       "counting manual annotations")
 
-runtime_values <- c(runtime_knit, runtime_hdr, runtime_svepa, runtime_psd)
+runtime_values <- c(runtime_knit, runtime_hdr, runtime_svepa, runtime_psd, runtime_mat_count)
 
 for (i in seq_along(runtime_variables)) {
   cat("Time taken for ", runtime_variables[i], ": ", round(runtime_values[i]/3600, 2), "h", "\n", sep = "")

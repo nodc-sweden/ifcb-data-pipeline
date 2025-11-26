@@ -3,11 +3,11 @@ author: "Anders Torstensson"
 date: "`r Sys.Date()`"
 params: 
   classifier: "Baltic" # "Baltic", "Skagerrak-Kattegat", "Tangesund" or "Skagerrak-Kattegat-Tangesund"
-  year: [2022, 2023, 2024] # each year separated by comma, e.g. [2022, 2023, 2024]
+  year: [2025] # each year separated by comma, e.g. [2022, 2023, 2024]
   threshold: "opt" # MATLAB classifier threshold, "opt", "adhoc" or "none"
   remove_flagged_data: !r c("bubbles", "incomplete", "near land") # What flags should be used for filtering data e.g. c("bubbles", "incomplete", "near land")
   regional: TRUE # If output should only contain data from the classifier region, e.g. Baltic data for the Baltic classifier
-  multiyear_delivery: TRUE # Include all years in a single data delivery
+  multiyear_delivery: FALSE # Include all years in a single data delivery
   f1_threshold: 0.9 # Remove classes below threshold this, not currently used
  
 output: html_document
@@ -49,7 +49,7 @@ library(patchwork)
 library(reticulate)
 
 # Installing the required Python dependencies in a specified virtual environment for the 'iRfcb' package
-ifcb_py_install(envname = ".virtualenvs/iRfcb")
+# ifcb_py_install(envname = ".virtualenvs/iRfcb")
 
 # Install svepa_event from Github to access Svea cruise numbers
 py_install("git+https://github.com/nodc-sweden/svepa_event.git", pip = TRUE)
@@ -249,7 +249,12 @@ for (i in seq_along(params$year)) {
       mutate(gpsLatitude = 58.07500, gpsLongitude = 11.49300)
   } else {
     hdr_data <- all_hdr_data %>%
-      select(sample, gpsLatitude, gpsLongitude, timestamp, date, year, month, day, time, ifcb_number)
+      select(sample, gpsLatitude, gpsLongitude, timestamp, date, year, month, day, time, ifcb_number, gpsTimeFromFix) %>%
+      mutate(gpsTimeFromFix = as.POSIXct(gpsTimeFromFix, format = "%b/%d/%Y %H:%M:%OS", tz = "UTC")) %>%
+      mutate(gpsLatitude = ifelse(abs(difftime(gpsTimeFromFix, timestamp, units = "mins")) > 10, NA, gpsLatitude),
+             gpsLongitude = ifelse(abs(difftime(gpsTimeFromFix, timestamp, units = "mins")) > 10, NA, gpsLongitude)
+      ) %>%
+      select(-gpsTimeFromFix)
   }
 
   missing_position <- hdr_data %>% filter(is.na(gpsLatitude) | is.na(gpsLongitude))
@@ -458,7 +463,10 @@ for (i in seq_along(params$year)) {
     hdr_folder = data_folder,
     micron_factor = 1 / 3.4,
     diatom_class = "Bacillariophyceae",
-    threshold = params$threshold
+    threshold = params$threshold,
+    use_python = FALSE,
+    verbose = FALSE,
+    drop_zero_volume = TRUE
   )
 
   # Store the summarized biovolume data in the list
@@ -520,7 +528,10 @@ if (file.exists(cache_path_manual)) {
       manual_folder,
       class2use_file,
       file.path(ifcb_path, "data"),
-      mat_recursive = FALSE
+      mat_recursive = FALSE,
+      use_python = FALSE,
+      verbose = FALSE,
+      drop_zero_volume = FALSE
     )
 
     # End time and compute runtime
@@ -538,7 +549,9 @@ if (file.exists(cache_path_manual)) {
     manual_folder,
     class2use_file,
     file.path(ifcb_path, "data"),
-    mat_recursive = FALSE
+    mat_recursive = FALSE,
+    use_python = FALSE,
+    drop_zero_volume = FALSE
   )
   
   # End time and compute runtime
@@ -942,13 +955,14 @@ for (i in seq_along(params$year)) {
   taxa_names_clean <- trimws(taxa_names_clean)
 
   # Retrieve worms records with retry mechanism
-  worms_records <- iRfcb:::retrieve_worms_records(taxa_names_clean,
-                                                  max_retries = 5,
-                                                  sleep_time = 60,
-                                                  marine_only = FALSE)
+  worms_records <- ifcb_match_taxa_names(taxa_names_clean,
+                                         max_retries = 5,
+                                         sleep_time = 60,
+                                         marine_only = FALSE,
+                                         verbose = FALSE)
 
   # Extract Aphia IDs and class names from WoRMS
-  aphia_id <- sapply(worms_records, iRfcb:::extract_aphia_id)
+  aphia_id <- worms_records$AphiaID
 
   # Select relevant information from WoRMS
   worms_df <- bind_rows(worms_records) %>%
@@ -1102,7 +1116,12 @@ for (i in seq_along(params$year)) {
     mutate(verified_by = ifelse(analysis_date > "2024-10-01" & params$classifier == "Tangesund", "Anders Torstensson", verified_by))
   
   # Combine human verified data (manual annotations) with automatic classification
-  data_aggregated <- bind_rows(data, data_manual)
+  if (nrow(data_manual) > 0) {
+    data_aggregated <- bind_rows(data, data_manual)
+  } else {
+    data_aggregated <- data
+  }
+  
 
   # Combine with ferrybox data, remove data with bad data flags (3 and above)
   data_aggregated <- data_aggregated %>%
