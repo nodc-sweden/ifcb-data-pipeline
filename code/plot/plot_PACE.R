@@ -3,21 +3,29 @@ library(SHARK4R)
 
 ifcb_path <- Sys.getenv("ifcb_path")
 
-baltic_2024 <- read_tsv(file.path(ifcb_path, "shark", "shark2024_Baltic_v9/SHARK_IFCB_2024_Baltic_SMHI/processed_data/data.txt"))
-baltic_2025 <- read_tsv(file.path(ifcb_path, "shark", "shark2025_Baltic_v9/SHARK_IFCB_2025_Baltic_SMHI/processed_data/data.txt"))
-westcoast_2024 <- read_tsv(file.path(ifcb_path, "shark", "shark2024_Skagerrak-Kattegat_v7/SHARK_IFCB_2024_Skagerrak-Kattegat_SMHI/processed_data/data.txt"))
-westcoast_2025 <- read_tsv(file.path(ifcb_path, "shark", "shark2025_Skagerrak-Kattegat_v7/SHARK_IFCB_2025_Skagerrak-Kattegat_SMHI/processed_data/data.txt"))
+# Read data
+westcoast <- read_tsv(file.path("data", "SHARK_IFCB_2024_2025_Baltic_SMHI/processed_data/data.txt"))
+baltic <- read_tsv(file.path("data", "SHARK_IFCB_2024_2025_Skagerrak-Kattegat_SMHI/processed_data/data.txt"))
 
-all_data <- bind_rows(baltic_2024, westcoast_2024, baltic_2025, westcoast_2025)
+# Bind all data together
+all_data <- bind_rows(baltic, westcoast)
 
+# Remove unclassified and assign plankton groups
 all_data <- all_data %>%
   filter(!is.na(LATNM)) %>%
   mutate(plankton_group = assign_phytoplankton_group(LATNM, APHIA_ID)$plankton_group)
 
+# Calculate plankton group biomass
 all_data_grouped <- all_data %>%
   group_by(MYEAR, CRUISE_NO, SDATE, STIME, SMPNO, plankton_group) %>%
   summarise(biomass = sum(C_CONC, na.rm = TRUE),
             biovol = sum(BIOVOL, na.rm = TRUE))
+
+# Prepare the data
+plot_data <- all_data_grouped %>%
+  group_by(MYEAR, CRUISE_NO, SDATE, STIME, plankton_group) %>%
+  summarise(biomass = sum(biomass), .groups = "drop") %>%
+  mutate(datetime = as.POSIXct(paste(SDATE, STIME)))
 
 # Plot for 2024
 plot_2024 <- plot_data %>%
@@ -59,14 +67,10 @@ plot_2025 <- plot_data %>%
     strip.text = element_text(face = "bold")
   )
 
-# Display plots
-plot_2024
-plot_2025
-
 # Save the 2024 plot
-ggsave("plankton_biomass_2024.png", plot = plot_2024,
+ggsave("plots/plankton_biomass_2024.png", plot = plot_2024,
        width = 12, height = 6, dpi = 300)
 
 # Save the 2025 plot
-ggsave("plankton_biomass_2025.png", plot = plot_2025,
+ggsave("plots/plankton_biomass_2025.png", plot = plot_2025,
        width = 12, height = 6, dpi = 300)
