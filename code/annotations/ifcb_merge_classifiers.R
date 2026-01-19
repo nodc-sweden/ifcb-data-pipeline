@@ -9,20 +9,25 @@ ifcb_path <- Sys.getenv("ifcb_path")
 # Name the new, merged dataset (folder and class2use names)
 smhi_merged_dataset_name <- "Skagerrak-Kattegat-Tangesund"
 smhi_niva_dataset_name <- "niva_smhi"
+smhi_niva_baltic_dataset_name <- "niva_smhi_baltic"
 
 # Define paths to class2use files
 class2use_file_base <- file.path(ifcb_path, "config", "class2use_Skagerrak-Kattegat.mat")
 class2use_file_tangesund <- file.path(ifcb_path, "config", "class2use_Tangesund.mat")
-class2use_file_niva <- file.path(ifcb_path, "ifcb139", "classifier", "class2use_20250310.mat")
+class2use_file_baltic <- file.path(ifcb_path, "config", "class2use_Baltic.mat")
+class2use_file_niva <- file.path(ifcb_path, "ifcb139", "classifier", "class2use_20251219.mat")
 class2use_file_combined_smhi <- file.path(ifcb_path, "config", paste0("class2use_", smhi_merged_dataset_name, ".mat"))
 class2use_file_combined_smhi_niva <- file.path(ifcb_path, "config", paste0("class2use_", smhi_niva_dataset_name, ".mat"))
+class2use_file_combined_smhi_niva_baltic <- file.path(ifcb_path, "config", paste0("class2use_", smhi_niva_baltic_dataset_name, ".mat"))
 
 # Define paths to manual folders
 manual_folder_base <- file.path(ifcb_path, "manual", "Skagerrak-Kattegat")
 manual_folder_tangesund <- file.path(ifcb_path, "manual", "Tangesund")
+manual_folder_baltic <- file.path(ifcb_path, "manual", "Baltic")
 manual_folder_niva <- file.path(ifcb_path, "ifcb139", "manual")
 manual_folder_smhi <- file.path(ifcb_path, "manual", smhi_merged_dataset_name)
 manual_folder_smhi_niva <- file.path(ifcb_path, "manual", smhi_niva_dataset_name)
+manual_folder_smhi_niva_baltic <- file.path(ifcb_path, "manual", smhi_niva_baltic_dataset_name)
 
 # Merge Tångesund and Skagerrak-Kattegat datasets
 ifcb_merge_manual(class2use_file_base,
@@ -40,11 +45,27 @@ ifcb_merge_manual(class2use_file_combined_smhi,
                   manual_folder_niva,
                   manual_folder_smhi_niva)
 
+# Merge the SMHI-NIVA and Baltic datasets
+ifcb_merge_manual(class2use_file_combined_smhi_niva,
+                  class2use_file_baltic,
+                  class2use_file_combined_smhi_niva_baltic,
+                  manual_folder_smhi_niva,
+                  manual_folder_baltic,
+                  manual_folder_smhi_niva_baltic)
+
 # Extract the images to verify the result
 ifcb_extract_annotated_images(manual_folder_smhi_niva,
                               class2use_file_combined_smhi_niva,
                               c(file.path(ifcb_path, "data"), file.path(ifcb_path, "ifcb139", "raw")),
                               file.path(ifcb_path, "png_images", smhi_niva_dataset_name, Sys.Date()),
+                              skip_class = "unclassified",
+                              verbose = TRUE,
+                              overwrite = TRUE)
+
+ifcb_extract_annotated_images(manual_folder_smhi_niva_baltic,
+                              class2use_file_combined_smhi_niva_baltic,
+                              c(file.path(ifcb_path, "data"), file.path(ifcb_path, "ifcb139", "raw")),
+                              file.path(ifcb_path, "png_images", smhi_niva_baltic_dataset_name, Sys.Date()),
                               skip_class = "unclassified",
                               verbose = TRUE,
                               overwrite = TRUE)
