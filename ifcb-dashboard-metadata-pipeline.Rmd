@@ -6,8 +6,8 @@ params:
   year: [2025] # each year separated by comma, e.g. [2022, 2023, 2024]
   remove_flagged_data: !r c("bubbles", "incomplete", "near land") # What flags should be used for filtering data e.g. c("bubbles", "incomplete", "near land")
   class_score_version: 1
-  save_psd_plots: FALSE
-  run_psd: TRUE
+  save_psd_plots: TRUE
+  run_psd: FALSE
 
 output: html_document
 knit: (function(inputFile, encoding) {
@@ -402,6 +402,7 @@ for (i in seq_along(params$year)) {
   # Calculate the particle size distribution (PSD) using IFCB data from the specified folders
   psd <- ifcb_psd(feature_folder = feature_folder,
                   hdr_folder = data_folder,
+                  bins = NULL,
                   save_data = TRUE,
                   output_file = psd_result_files,
                   plot_folder = psd_plot_folder,

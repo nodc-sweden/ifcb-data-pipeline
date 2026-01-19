@@ -47,7 +47,7 @@ ats_email <- Sys.getenv("ats_email")
 at_email <- Sys.getenv("email_address")
 
 # Installing the required Python dependencies in a specified virtual environment for the 'iRfcb' package
-# ifcb_py_install(envname = ".virtualenvs/iRfcb")
+ifcb_py_install(envname = ".virtualenvs/iRfcb")
 
 # Install svepa_event from Github to access Svea cruise numbers
 py_install("git+https://github.com/nodc-sweden/svepa_event.git", pip = TRUE)
@@ -169,16 +169,20 @@ metadata_list <- list()
 for (classifier in seq_along(params$classifier[!grepl("iRfcb", params$classifier)])) {
   
   # Summarize metadata for each image
-  metadata <- ifcb_summarize_png_metadata(png_folders[classifier], features_folder, data_folder)
+  metadata <- ifcb_summarize_png_metadata(png_folders[classifier], feature_folder = features_folder, hdr_folder = data_folder)
 
   # Add position to Tångesund data
   metadata <- metadata  %>%
       mutate(gpsLatitude = ifelse(ifcb_number == "IFCB110" & year == 2016, 58.07500, gpsLatitude),
-             gpsLongitude = ifelse(ifcb_number == "IFCB110" & year == 2016, 11.49300, gpsLongitude)) %>%
+             gpsLongitude = ifelse(ifcb_number == "IFCB110" & year == 2016, 11.49300, gpsLongitude))
+  
+  if (!params$classifier[classifier] == "Tangesund") {
+    metadata <- metadata %>%
       mutate(gpsTimeFromFix = as.POSIXct(gpsTimeFromFix, format = "%b/%d/%Y %H:%M:%OS", tz = "UTC")) %>%
       mutate(gpsLatitude = ifelse(abs(difftime(gpsTimeFromFix, timestamp, units = "mins")) > 10, NA, gpsLatitude),
              gpsLongitude = ifelse(abs(difftime(gpsTimeFromFix, timestamp, units = "mins")) > 10, NA, gpsLongitude)
       )
+  }
   
   # Identify rows in hdr_data where the year is not 2016 and GPS latitude or longitude is missing
   missing_position <- metadata %>%
@@ -211,11 +215,13 @@ for (classifier in seq_along(params$classifier[!grepl("iRfcb", params$classifier
   
   manual_analysis_dates <- data.frame(sample = NULL, analysis_date = NULL, analysis_time = NULL)
   for (mat in mat_files) {
-    file_info <- file.info(mat)$ctime
+    fi <- suppressWarnings(file.info(mat))
     
-    temp <- data.frame(sample = sub(".mat$", "", basename(mat)), 
-                       analysis_date = as.Date(file_info), 
-                       analysis_time = format(ymd_hms(file_info), "%H:%M:%S"))
+    temp <- data.frame(
+      sample = sub("\\.mat$", "", basename(mat)),
+      analysis_date = as.Date(fi$ctime),
+      analysis_time = format(lubridate::ymd_hms(fi$ctime), "%H:%M:%S")
+    )
     
     manual_analysis_dates <- rbind(manual_analysis_dates, temp)
   }
@@ -240,6 +246,13 @@ Here sample time stamps are matched with SVEPA using the [`svepa_event`](https:/
 ```{r get_svepa, include=TRUE, results = 'hide', echo=TRUE, warning=FALSE}
 # Start time
 start.time <- Sys.time()
+
+# Read list with additional cruise numbers
+additional_cruises <- read_tsv("data/cruise_numbers.txt", col_types = cols()) %>%
+  mutate(
+    startdate = as.POSIXct(startdate, format = "%Y-%m-%d %H:%M", tz = "UTC"),
+    stopdate = as.POSIXct(stopdate, format = "%Y-%m-%d %H:%M", tz = "UTC")
+  )
 
 # Initialize a list to store the processed HDR data for each year
 svepa_list <- list()
@@ -270,7 +283,17 @@ for (i in seq_along(params$classifier[!grepl("iRfcb", params$classifier)])) {
       svepa_result <- py$safe_get_svepa_event(svepa_event, "SVEA", timestamp)
       
       if (is.null(svepa_result$id)) {
-        svepa_id <- NA
+        # Convert timestamp to Date object
+        timestamp_datetime <- as.POSIXct(timestamp, format = "%Y%m%d%H%M%S", tz = "UTC")
+        
+        # Find the cruise number from additional resource
+        svepa_id <- additional_cruises %>%
+          filter(timestamp_datetime >= startdate & timestamp_datetime <= stopdate) %>%
+          pull(cruise_no)
+        
+        if (length(svepa_id) == 0) {
+          svepa_id <- NA
+        }
       } else {
         svepa_id <- svepa_result$id
       }
@@ -311,6 +334,7 @@ for (classifier in seq_along(params$classifier[!grepl("iRfcb", params$classifier
   taxa_names_clean <- iRfcb:::truncate_folder_name(taxa_names)
   taxa_names_clean <- gsub("_", " ", taxa_names_clean)
   taxa_names_clean <- gsub(" single cell", "", taxa_names_clean)
+  taxa_names_clean <- gsub(" single", "", taxa_names_clean)
   taxa_names_clean <- gsub(" chain", "", taxa_names_clean)
   taxa_names_clean <- gsub(" coil", "", taxa_names_clean)
   taxa_names_clean <- gsub(" filament", "", taxa_names_clean)

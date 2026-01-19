@@ -2,11 +2,11 @@
 author: "Anders Torstensson"
 date: "`r Sys.Date()`"
 params: 
-  classifier: "Baltic" # "Baltic", "Skagerrak-Kattegat", "Tangesund" or "Skagerrak-Kattegat-Tangesund"
+  classifier: "niva_smhi" # "Baltic", "Skagerrak-Kattegat", "Tangesund" or "Skagerrak-Kattegat-Tangesund"
   year: [2025] # each year separated by comma, e.g. [2022, 2023, 2024]
   threshold: "opt" # MATLAB classifier threshold, "opt", "adhoc" or "none"
   remove_flagged_data: !r c("bubbles", "incomplete", "near land") # What flags should be used for filtering data e.g. c("bubbles", "incomplete", "near land")
-  regional: TRUE # If output should only contain data from the classifier region, e.g. Baltic data for the Baltic classifier
+  regional: FALSE # If output should only contain data from the classifier region, e.g. Baltic data for the Baltic classifier
   multiyear_delivery: FALSE # Include all years in a single data delivery
   f1_threshold: 0.9 # Remove classes below threshold this, not currently used
  
@@ -38,8 +38,8 @@ knitr::opts_chunk$set(echo = TRUE)
 knit.time <- Sys.time()
 
 # Load required libraries
-library(SHARK4R)
 library(iRfcb)
+library(SHARK4R)
 library(tidyverse)
 library(worrms)
 library(leaflet)
@@ -89,6 +89,7 @@ shapefile_path <- file.path(extracted_dir, "EEA_Coastline_20170228.shp")
 # Create a named list of classifiers and their associated URLs
 classifier_urls <- list(
     "Skagerrak-Kattegat" = "https://ecotaxa.obs-vlfr.fr/prj/14392",
+    "niva_smhi_baltic" = "none",
     "Baltic" = "https://ecotaxa.obs-vlfr.fr/prj/822",
     "Tangesund" = "https://ecotaxa.obs-vlfr.fr/prj/899"
 )
@@ -99,6 +100,7 @@ associated_media_manual <- coalesce(classifier_urls[[params$classifier]], NA)
 # Create a named list of classifiers and their associated URLs
 humans <- list(
     "Skagerrak-Kattegat" = "Ann-Turi Skjevik",
+    "niva_smhi_baltic" = "Ann-Turi Skjevik, Malin Mohlin, Wenche Eikrem",
     "Baltic" = "Ann-Turi Skjevik",
     "Tangesund" = "Malin Mohlin"
 )
@@ -259,7 +261,11 @@ for (i in seq_along(params$year)) {
 
   missing_position <- hdr_data %>% filter(is.na(gpsLatitude) | is.na(gpsLongitude))
   if (nrow(missing_position) > 0) {
-    ferrybox_positions <- ifcb_get_ferrybox_data(missing_position$timestamp, ferrybox_path) %>%
+    ferrybox_positions <- ifcb_get_ferrybox_data(missing_position$timestamp, 
+                                                 ferrybox_path, 
+                                                 ship = "SveaAWS",
+                                                 timestamp_param = "38067",
+                                                 max_time_diff_min = 5) %>%
       rename(gpsLatitude_fb = gpsLatitude, gpsLongitude_fb = gpsLongitude)
     hdr_data <- hdr_data %>%
       left_join(ferrybox_positions, by = "timestamp") %>%
@@ -274,7 +280,8 @@ for (i in seq_along(params$year)) {
                            "88190", "8191", "88191")
   
   if (!params$classifier == "Tangesund") {
-    ferrybox_data <- ifcb_get_ferrybox_data(hdr_data$timestamp, ferrybox_path, parameters = ferrybox_parameters)
+    ferrybox_data <- ifcb_get_ferrybox_data(hdr_data$timestamp, ferrybox_path, parameters = ferrybox_parameters,
+                                            max_time_diff_min = 5)
   } else {
     ferrybox_data <- data.frame(matrix(NA, ncol = length(ferrybox_parameters) + 1, nrow = 1))
     colnames(ferrybox_data) <- c("timestamp", ferrybox_parameters)
@@ -703,7 +710,7 @@ for (i in seq_along(params$year)) {
     filter(!is.na(gpsLatitude) | !is.na(gpsLongitude))
 
   # Determine if positions are near land using specified shapefile
-  near_land <- ifcb_is_near_land(
+  near_land <- iRfcb::ifcb_is_near_land(
     positions$gpsLatitude,
     positions$gpsLongitude,
     distance = 500, # Släggö is about 600 m from Land
@@ -955,12 +962,12 @@ for (i in seq_along(params$year)) {
   taxa_names_clean <- trimws(taxa_names_clean)
 
   # Retrieve worms records with retry mechanism
-  worms_records <- ifcb_match_taxa_names(taxa_names_clean,
-                                         max_retries = 5,
-                                         sleep_time = 60,
-                                         marine_only = FALSE,
-                                         verbose = FALSE)
-
+  worms_records <- match_worms_taxa(taxa_names_clean,
+                                    max_retries = 5,
+                                    sleep_time = 60,
+                                    marine_only = FALSE,
+                                    verbose = FALSE)
+    
   # Extract Aphia IDs and class names from WoRMS
   aphia_id <- worms_records$AphiaID
 
@@ -1160,80 +1167,80 @@ for (i in seq_along(params$year)) {
 This section calculates and visualizes the monthly mean counts per liter of plankton for each basin, distinguishing between flagged and unflagged data. The visualization helps in understanding the distribution and trends in plankton counts across different basins over the year.
 
 ```{r plot_data, message=FALSE}
-# Initialize a list to store plots for each year
-plots <- list()
-
-for (i in seq_along(params$year)) {
-
-  # Extract data for the current year
-  data_aggregated_year <- data_aggregated_list[[as.character(params$year[i])]]
-
-  # Get unique worms classes
-  worms_classes <- unique(data_aggregated_year$worms_class)
-
-  # Initialize a list to store plots for the current year and worms class
-  year_plots <- list()
-
-  for (worms_class in worms_classes) {
-
-    # Filter data for the current worms class
-    data_worms_class <- data_aggregated_year %>%
-      filter(worms_class == !!worms_class)
-
-    # Calculate monthly means and plot for all data
-    plot_all <- data_worms_class %>%
-      group_by(basin, month) %>%
-      summarise(mean = mean(counts_per_liter, na.rm = TRUE),
-                sd = sd(counts_per_liter, na.rm = TRUE),
-                .groups = "drop") %>%
-      ggplot(aes(x = month, y = mean, color = basin)) +
-      geom_point() +
-      geom_errorbar(aes(ymin = mean - sd, ymax = mean + sd), width = 0.2) +
-      labs(title = paste0(params$year[i], ", ", worms_class, ", all data"),
-           x = "Month",
-           y = "Counts per Liter",
-           color = "Basin") +
-      scale_x_discrete(limits = as.character(1:12)) +  # Set x-axis limits to all month names
-      theme_minimal() +
-      theme(legend.position = "bottom")
-
-    # Calculate monthly means and plot for data without Q-flag
-    plot_no_flag <- data_worms_class %>%
-      filter(is.na(flag)) %>%
-      group_by(basin, month) %>%
-      summarise(mean = mean(counts_per_liter, na.rm = TRUE),
-                sd = sd(counts_per_liter, na.rm = TRUE),
-                .groups = "drop") %>%
-      ggplot(aes(x = month, y = mean, color = basin)) +
-      geom_point() +
-      geom_errorbar(aes(ymin = mean - sd, ymax = mean + sd), width = 0.2) +
-      labs(title = paste0(worms_class, ", no flagged data"),
-           x = "Month",
-           y = "Counts per Liter",
-           color = "Basin") +
-      scale_x_discrete(limits = as.character(1:12)) +  # Set x-axis limits to all month names
-      theme_minimal() +
-      theme(legend.position = "bottom")
-
-    # Combine the two plots with a shared legend
-    combined_plot <- plot_all + 
-      plot_no_flag + 
-      plot_layout(guides = "collect") & theme(legend.position = "bottom")
-
-    # Store combined plot for the current worms class
-    year_plots[[worms_class]] <- combined_plot
-  }
-
-  # Store all worms_class plots for the current year
-  plots[[as.character(params$year[i])]] <- year_plots
-}
-
-# Print combined plots for each year and each worms_class
-for (i in seq_along(params$year)) {
-  for (worms_class in names(plots[[as.character(params$year[i])]])) {
-    print(plots[[as.character(params$year[i])]][[worms_class]])
-  }
-}
+# # Initialize a list to store plots for each year
+# plots <- list()
+# 
+# for (i in seq_along(params$year)) {
+# 
+#   # Extract data for the current year
+#   data_aggregated_year <- data_aggregated_list[[as.character(params$year[i])]]
+# 
+#   # Get unique worms classes
+#   worms_classes <- unique(data_aggregated_year$worms_class)
+# 
+#   # Initialize a list to store plots for the current year and worms class
+#   year_plots <- list()
+# 
+#   for (worms_class in worms_classes) {
+# 
+#     # Filter data for the current worms class
+#     data_worms_class <- data_aggregated_year %>%
+#       filter(worms_class == !!worms_class)
+# 
+#     # Calculate monthly means and plot for all data
+#     plot_all <- data_worms_class %>%
+#       group_by(basin, month) %>%
+#       summarise(mean = mean(counts_per_liter, na.rm = TRUE),
+#                 sd = sd(counts_per_liter, na.rm = TRUE),
+#                 .groups = "drop") %>%
+#       ggplot(aes(x = month, y = mean, color = basin)) +
+#       geom_point() +
+#       geom_errorbar(aes(ymin = mean - sd, ymax = mean + sd), width = 0.2) +
+#       labs(title = paste0(params$year[i], ", ", worms_class, ", all data"),
+#            x = "Month",
+#            y = "Counts per Liter",
+#            color = "Basin") +
+#       scale_x_discrete(limits = as.character(1:12)) +  # Set x-axis limits to all month names
+#       theme_minimal() +
+#       theme(legend.position = "bottom")
+# 
+#     # Calculate monthly means and plot for data without Q-flag
+#     plot_no_flag <- data_worms_class %>%
+#       filter(is.na(flag)) %>%
+#       group_by(basin, month) %>%
+#       summarise(mean = mean(counts_per_liter, na.rm = TRUE),
+#                 sd = sd(counts_per_liter, na.rm = TRUE),
+#                 .groups = "drop") %>%
+#       ggplot(aes(x = month, y = mean, color = basin)) +
+#       geom_point() +
+#       geom_errorbar(aes(ymin = mean - sd, ymax = mean + sd), width = 0.2) +
+#       labs(title = paste0(worms_class, ", no flagged data"),
+#            x = "Month",
+#            y = "Counts per Liter",
+#            color = "Basin") +
+#       scale_x_discrete(limits = as.character(1:12)) +  # Set x-axis limits to all month names
+#       theme_minimal() +
+#       theme(legend.position = "bottom")
+# 
+#     # Combine the two plots with a shared legend
+#     combined_plot <- plot_all + 
+#       plot_no_flag + 
+#       plot_layout(guides = "collect") & theme(legend.position = "bottom")
+# 
+#     # Store combined plot for the current worms class
+#     year_plots[[worms_class]] <- combined_plot
+#   }
+# 
+#   # Store all worms_class plots for the current year
+#   plots[[as.character(params$year[i])]] <- year_plots
+# }
+# 
+# # Print combined plots for each year and each worms_class
+# for (i in seq_along(params$year)) {
+#   for (worms_class in names(plots[[as.character(params$year[i])]])) {
+#     print(plots[[as.character(params$year[i])]][[worms_class]])
+#   }
+# }
 
 ```
 
