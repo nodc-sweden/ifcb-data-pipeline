@@ -95,12 +95,6 @@ for (src_folder in source_folders) {
   folder_name <- path_file(src_folder)
   dest_folder <- path(raw_folder, folder_name)
   
-  # Skip folder if already exists in destination
-  if (dir_exists(dest_folder)) {
-    # message("Skipping existing folder: ", folder_name)
-    next
-  }
-  
   # List all files recursively inside the source folder
   files <- dir_ls(src_folder, recurse = TRUE, type = "file")
   
@@ -116,7 +110,6 @@ for (src_folder in source_folders) {
   if (length(large_files_idx) > 0) {
     
     large_files <- files[large_files_idx]
-    # Extract bin names (file without extension)
     large_bins <- file_path_sans_ext(basename(large_files))
     
     log_entry <- paste(
@@ -132,25 +125,36 @@ for (src_folder in source_folders) {
       log_file
     ))
     
-    # Remove large files from list of files to copy
-    files <- files[!grepl(paste(large_bins, collapse="|"), files)]
+    # Remove all files belonging to large bins (.roi, .hdr, .adc, etc.)
+    bin_ids <- file_path_sans_ext(basename(large_files))
+    
+    files <- files[
+      !file_path_sans_ext(basename(files)) %in% bin_ids
+    ]
   }
   
-  if (length(files) > 0) {
-    
-    message("Copying new folder: ", folder_name)
-    dir_create(dest_folder)
-    
-    # --------------------------------------------------------
-    # Copy remaining files preserving folder structure
-    # --------------------------------------------------------
-    for (file in files) {
-      rel_path <- path_rel(file, start = src_folder)
-      dest_path <- path(dest_folder, rel_path)
-      
-      dir_create(path_dir(dest_path))
-      file_copy(file, dest_path, overwrite = TRUE)
-    }
+  if (length(files) == 0) {
+    next
+  }
+  
+  # Determine which files are new
+  rel_paths <- path_rel(files, start = src_folder)
+  dest_paths <- path(dest_folder, rel_paths)
+  
+  new_files_idx <- !file_exists(dest_paths)
+  
+  if (!any(new_files_idx)) {
+    next
+  }
+  
+  message("Syncing folder: ", folder_name)
+  
+  # Now it is safe to create directories
+  dir_create(dest_folder)
+  
+  for (i in which(new_files_idx)) {
+    dir_create(path_dir(dest_paths[i]))
+    file_copy(files[i], dest_paths[i])
   }
 }
 
@@ -169,21 +173,24 @@ roi_bins <- tools::file_path_sans_ext(basename(roi_files))
 # Skip already processed bins
 bins_to_process <- roi_bins[!roi_bins %in% feature_bins]
 
-# Match ROI files for the bins
-matched_roi <- tibble(file = roi_files) %>%
-  filter(str_detect(file, str_c(bins_to_process, collapse = "|"))) %>%
-  pull(file)
-
-# Check file sizes
-file_sizes <- file.size(matched_roi)
-
-# Identify bins with 0 KB files
-empty_bins <- unique(str_extract(matched_roi[file_sizes == 0], "D\\d{8}T\\d{6}_IFCB\\d+"))
-
-# Remove empty bins from bins_to_process
-bins_to_process <- setdiff(bins_to_process, empty_bins)
-
 if (length(bins_to_process) > 0) {
+  
+  # Match ROI files for the bins
+  matched_roi <- tibble(file = roi_files) %>%
+    filter(str_detect(file, str_c(bins_to_process, collapse = "|"))) %>%
+    pull(file)
+  
+  # Check file sizes
+  file_sizes <- file.size(matched_roi)
+  
+  # Identify bins with 0 KB files
+  empty_bins <- unique(str_extract(matched_roi[file_sizes == 0], "D\\d{8}T\\d{6}_IFCB\\d+"))
+  
+  # Remove empty bins from bins_to_process
+  bins_to_process <- setdiff(bins_to_process, empty_bins)
+  
+  cat("Updating Dashboard metadata...\n")
+  
   # Read list with additional cruise numbers
   additional_cruises <- read_tsv(cruise_number_file, col_types = cols(), progress = FALSE) %>%
     mutate(
@@ -248,10 +255,25 @@ if (length(bins_to_process) > 0) {
   
   # Keep only relevant information and NA coordinate if fix is older than 10 minutes
   hdr_data <- all_hdr_data %>%
-    select(sample, gpsLatitude, gpsLongitude, timestamp, date, year, month, day, time, ifcb_number, gpsTimeFromFix) %>%
-    mutate(gpsTimeFromFix = as.POSIXct(gpsTimeFromFix, format = "%b/%d/%Y %H:%M:%OS", tz = "UTC")) %>%
-    mutate(gpsLatitude = ifelse(abs(difftime(gpsTimeFromFix, timestamp, units = "mins")) > 10, NA, gpsLatitude),
-           gpsLongitude = ifelse(abs(difftime(gpsTimeFromFix, timestamp, units = "mins")) > 10, NA, gpsLongitude)
+    select(any_of(c("sample", "gpsLatitude", "gpsLongitude", "timestamp",
+                    "date", "year", "month", "day", "time",
+                    "ifcb_number", "gpsTimeFromFix"))) %>%
+    
+    # Ensure columns exist
+    mutate(
+      gpsLatitude = if (!"gpsLatitude" %in% names(.)) NA_real_ else gpsLatitude,
+      gpsLongitude = if (!"gpsLongitude" %in% names(.)) NA_real_ else gpsLongitude,
+      gpsTimeFromFix = if (!"gpsTimeFromFix" %in% names(.)) NA_character_ else gpsTimeFromFix
+    ) %>%
+    
+    mutate(
+      gpsTimeFromFix = as.POSIXct(gpsTimeFromFix,
+                                  format = "%b/%d/%Y %H:%M:%OS",
+                                  tz = "UTC"),
+      gpsLatitude = ifelse(abs(difftime(gpsTimeFromFix, timestamp, units = "mins")) > 10,
+                           NA, gpsLatitude),
+      gpsLongitude = ifelse(abs(difftime(gpsTimeFromFix, timestamp, units = "mins")) > 10,
+                            NA, gpsLongitude)
     ) %>%
     select(-gpsTimeFromFix)
   
@@ -408,6 +430,8 @@ if (length(bins_to_process) > 0) {
   # Import function to extract all features
   extract_slim_features <- import("extract_slim_features")
   
+  cat("Extracting features...\n")
+  
   # Extract v4 features
   extract_slim_features$extract_and_save_all_features(as.character(raw_folder),
                                                       as.character(feature_folder),
@@ -450,6 +474,10 @@ if (file.exists(psd_flags_file)) {
   psd_flags <- data.frame()
 }
 
+if (!exists("empty_bins")) {
+  empty_bins <- NA
+}
+
 # Keep only bins whose timestamp is NOT in processed_bins
 bins_to_psd <- roi_bins[!roi_bins %in% processed_bins]
 
@@ -458,8 +486,7 @@ bins_to_psd <- setdiff(bins_to_psd, empty_bins)
 
 if (length(bins_to_psd) > 0) {
   
-  # Use venv
-  use_virtualenv(file.path(repo_dir, "venv"))
+  cat("Running PSD QC...\n")
   
   # Calculate the particle size distribution (PSD) using IFCB data from the specified folders
   psd <- ifcb_psd(feature_folder = feature_folder,
