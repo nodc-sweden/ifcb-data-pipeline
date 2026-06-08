@@ -28,8 +28,10 @@ ifcb_path <- Sys.getenv("ifcb_path")
 ifcb_base_path <- Sys.getenv("ifcb_base_path")
 ferrybox_path <- Sys.getenv("ferrybox_path")
 repo_dir <- "C:/R/ifcb-data-pipeline"
+cnn_model <- "SMHI NIVA ResNet50 V5"
 
 feature_folder <- file.path(ifcb_path, "features", "v4", year)
+class_folder <- file.path(ifcb_path, "classified", gsub(" ", "-", cnn_model), paste0("class", year, "_v3"))
 blobs_folder <- file.path(ifcb_path, "blobs", "v4", year)
 delivery_dir <- file.path(ifcb_base_path, "delivery", year)
 raw_folder <- file.path(ifcb_path, "data", year)
@@ -51,7 +53,7 @@ size_threshold <- 536870912  # bytes
 skip_flags <- c("Bubbles", "Incomplete Run", "Beads")
 
 # Use venv
-use_virtualenv(file.path(repo_dir, "venv"))
+use_virtualenv(file.path(repo_dir, ".virtualenvs", "features"))
 
 # Import the svepa_event Python module
 svepa_event <- import("svepa_event")
@@ -89,6 +91,8 @@ blacklist_regex <- paste(blacklist, collapse = "|")
 # Get list of folders in source
 source_folders <- dir_ls(delivery_dir, type = "directory")
 
+skip_bins <- character()
+
 # Process each folder
 for (src_folder in source_folders) {
   
@@ -100,6 +104,9 @@ for (src_folder in source_folders) {
   
   # Filter out blacklisted files
   if (!is.null(blacklist_regex)) {
+    bad_files <- files[grepl(blacklist_regex, files)]
+    bad_bins <- unique(basename(tools::file_path_sans_ext(bad_files)))
+    skip_bins <- c(skip_bins, bad_bins)
     files <- files[!grepl(blacklist_regex, files)]
   }
   
@@ -189,232 +196,236 @@ if (length(bins_to_process) > 0) {
   # Remove empty bins from bins_to_process
   bins_to_process <- setdiff(bins_to_process, empty_bins)
   
-  cat("Updating Dashboard metadata...\n")
-  
-  # Read list with additional cruise numbers
-  additional_cruises <- read_tsv(cruise_number_file, col_types = cols(), progress = FALSE) %>%
-    mutate(
-      startdate = as.POSIXct(startdate, format = "%Y-%m-%d %H:%M", tz = "UTC"),
-      stopdate = as.POSIXct(stopdate, format = "%Y-%m-%d %H:%M", tz = "UTC")
+  if (length(bins_to_process) > 0) {
+    
+    cat("Updating Dashboard metadata...\n")
+    
+    # Read list with additional cruise numbers
+    additional_cruises <- read_tsv(cruise_number_file, col_types = cols(), progress = FALSE) %>%
+      mutate(
+        startdate = as.POSIXct(startdate, format = "%Y-%m-%d %H:%M", tz = "UTC"),
+        stopdate = as.POSIXct(stopdate, format = "%Y-%m-%d %H:%M", tz = "UTC")
+      )
+    
+    # Extract date and time from bins_to_process
+    bin_times <- tibble(
+      pid = roi_bins,
+      datetime = ymd_hms(str_sub(roi_bins, 2, 16))
     )
-  
-  # Extract date and time from bins_to_process
-  bin_times <- tibble(
-    pid = roi_bins,
-    datetime = ymd_hms(str_sub(roi_bins, 2, 16))
-  )
-  
-  # Join each bin to the corresponding cruise number
-  bin_cruises <- bin_times %>%
-    left_join(
-      additional_cruises,
-      join_by(between(datetime, startdate, stopdate))
-    ) 
-  
-  # Identify samples with missing cruise number, to be matched with SVEPA
-  missing_cruise <- bin_cruises %>%
-    filter(is.na(cruise_no))
-  
-  # Create an empty vector
-  svepa_cruise_numbers <- data.frame(pid = as.character(), svepa_cruise_no = as.character())
-  
-  for (sample in seq_along(missing_cruise$pid)) {
-    timestamp <- format(missing_cruise$datetime[sample], "%Y%m%d%H%M%S")
     
-    # Call the Python function
-    svepa_result <- py$safe_get_svepa_event(svepa_event, "SVEA", timestamp)
+    # Join each bin to the corresponding cruise number
+    bin_cruises <- bin_times %>%
+      left_join(
+        additional_cruises,
+        join_by(between(datetime, startdate, stopdate))
+      ) 
     
-    if (is.null(svepa_result$id)) {
-      svepa_id <- NA
-    } else {
-      svepa_id <- svepa_result$id
+    # Identify samples with missing cruise number, to be matched with SVEPA
+    missing_cruise <- bin_cruises %>%
+      filter(is.na(cruise_no))
+    
+    # Create an empty vector
+    svepa_cruise_numbers <- data.frame(pid = as.character(), svepa_cruise_no = as.character())
+    
+    for (sample in seq_along(missing_cruise$pid)) {
+      timestamp <- format(missing_cruise$datetime[sample], "%Y%m%d%H%M%S")
+      
+      # Call the Python function
+      svepa_result <- py$safe_get_svepa_event(svepa_event, "SVEA", timestamp)
+      
+      if (is.null(svepa_result$id)) {
+        svepa_id <- NA
+      } else {
+        svepa_id <- svepa_result$id
+      }
+      
+      cruise_number <- data.frame(pid = missing_cruise$pid[sample],
+                                  svepa_cruise_no = svepa_id)
+      
+      # Add to cruise_numbers df
+      svepa_cruise_numbers <- bind_rows(svepa_cruise_numbers, cruise_number)
     }
     
-    cruise_number <- data.frame(pid = missing_cruise$pid[sample],
-                                svepa_cruise_no = svepa_id)
+    # Join each bin to the corresponding cruise number
+    bin_cruises <- bin_cruises %>%
+      left_join(svepa_cruise_numbers, by = "pid") %>%
+      mutate(cruise_no = coalesce(cruise_no, svepa_cruise_no)) %>%
+      select(-svepa_cruise_no) %>%
+      mutate(
+        cruise_no = paste0("SVEA_", year(datetime), "_", cruise_no)
+      )
     
-    # Add to cruise_numbers df
-    svepa_cruise_numbers <- bind_rows(svepa_cruise_numbers, cruise_number)
-  }
-  
-  # Join each bin to the corresponding cruise number
-  bin_cruises <- bin_cruises %>%
-    left_join(svepa_cruise_numbers, by = "pid") %>%
-    mutate(cruise_no = coalesce(cruise_no, svepa_cruise_no)) %>%
-    select(-svepa_cruise_no) %>%
-    mutate(
-      cruise_no = paste0("SVEA_", year(datetime), "_", cruise_no)
-    )
-  
-  # Retrieve GPS postion from HDR files
-  all_hdr_data <- ifcb_read_hdr_data(file.path(raw_folder, 
-                                               str_extract(roi_bins, "^D\\d{8}"), 
-                                               paste0(roi_bins, ".hdr")),
-                                     gps_only = FALSE,
-                                     verbose = FALSE)
-  
-  # Keep only relevant information and NA coordinate if fix is older than 10 minutes
-  hdr_data <- all_hdr_data %>%
-    select(any_of(c("sample", "gpsLatitude", "gpsLongitude", "timestamp",
-                    "date", "year", "month", "day", "time",
-                    "ifcb_number", "gpsTimeFromFix"))) %>%
+    # Retrieve GPS postion from HDR files
+    all_hdr_data <- ifcb_read_hdr_data(file.path(raw_folder, 
+                                                 str_extract(roi_bins, "^D\\d{8}"), 
+                                                 paste0(roi_bins, ".hdr")),
+                                       gps_only = FALSE,
+                                       verbose = FALSE)
     
-    # Ensure columns exist
-    mutate(
-      gpsLatitude = if (!"gpsLatitude" %in% names(.)) NA_real_ else gpsLatitude,
-      gpsLongitude = if (!"gpsLongitude" %in% names(.)) NA_real_ else gpsLongitude,
-      gpsTimeFromFix = if (!"gpsTimeFromFix" %in% names(.)) NA_character_ else gpsTimeFromFix
-    ) %>%
-    
-    mutate(
-      gpsTimeFromFix = as.POSIXct(gpsTimeFromFix,
-                                  format = "%b/%d/%Y %H:%M:%OS",
-                                  tz = "UTC"),
-      gpsLatitude = ifelse(abs(difftime(gpsTimeFromFix, timestamp, units = "mins")) > 10,
-                           NA, gpsLatitude),
-      gpsLongitude = ifelse(abs(difftime(gpsTimeFromFix, timestamp, units = "mins")) > 10,
-                            NA, gpsLongitude)
-    ) %>%
-    select(-gpsTimeFromFix)
-  
-  # Identify rows in hdr_data where GPS latitude or longitude is missing
-  missing_position <- hdr_data %>%
-    filter(is.na(gpsLatitude)) %>%
-    filter(is.na(gpsLongitude))
-  
-  # If there are rows with missing GPS positions
-  if (nrow(missing_position) > 0) {
-    
-    # Set AWS flag
-    use_aws <- TRUE
-    
-    # Retrieve ferrybox positions for the timestamps of the missing GPS data
-    ferrybox_positions <- tryCatch(
-      {
-        ifcb_get_ferrybox_data(
-          missing_position$timestamp,
-          ferrybox_path,
-          ship = "SveaAWS",
-          timestamp_param = "38067",
-          max_time_diff_min = 5
-        )
-      },
-      error = function(e) {
-        use_aws <<- FALSE
-        ifcb_get_ferrybox_data(
-          missing_position$timestamp,
-          ferrybox_path,
-          max_time_diff_min = 5
-        )
-      }
-    )
-    
-    if (use_aws) {
-      # Identify rows that are missing after getting AWS data
-      still_missing_positions <- ferrybox_positions %>%
-        filter(is.na(gpsLatitude)) %>%
-        filter(is.na(gpsLongitude))
+    # Keep only relevant information and NA coordinate if fix is older than 10 minutes
+    hdr_data <- all_hdr_data %>%
+      select(any_of(c("sample", "gpsLatitude", "gpsLongitude", "timestamp",
+                      "date", "year", "month", "day", "time",
+                      "ifcb_number", "gpsTimeFromFix"))) %>%
       
-      # Get data from SveaFB files
-      ferrybox_positions_fb <- ifcb_get_ferrybox_data( missing_position$timestamp,
-                                                       ferrybox_path,
-                                                       max_time_diff_min = 5) %>%
+      # Ensure columns exist
+      mutate(
+        gpsLatitude = if (!"gpsLatitude" %in% names(.)) NA_real_ else gpsLatitude,
+        gpsLongitude = if (!"gpsLongitude" %in% names(.)) NA_real_ else gpsLongitude,
+        gpsTimeFromFix = if (!"gpsTimeFromFix" %in% names(.)) NA_character_ else gpsTimeFromFix
+      ) %>%
+      
+      mutate(
+        gpsTimeFromFix = as.POSIXct(gpsTimeFromFix,
+                                    format = "%b/%d/%Y %H:%M:%OS",
+                                    tz = "UTC"),
+        gpsLatitude = ifelse(abs(difftime(gpsTimeFromFix, timestamp, units = "mins")) > 10,
+                             NA, gpsLatitude),
+        gpsLongitude = ifelse(abs(difftime(gpsTimeFromFix, timestamp, units = "mins")) > 10,
+                              NA, gpsLongitude)
+      ) %>%
+      select(-gpsTimeFromFix)
+    
+    # Identify rows in hdr_data where GPS latitude or longitude is missing
+    missing_position <- hdr_data %>%
+      filter(is.na(gpsLatitude)) %>%
+      filter(is.na(gpsLongitude))
+    
+    # If there are rows with missing GPS positions
+    if (nrow(missing_position) > 0) {
+      
+      # Set AWS flag
+      use_aws <- TRUE
+      
+      # Retrieve ferrybox positions for the timestamps of the missing GPS data
+      ferrybox_positions <- tryCatch(
+        {
+          ifcb_get_ferrybox_data(
+            missing_position$timestamp,
+            ferrybox_path,
+            ship = "SveaAWS",
+            timestamp_param = "38067",
+            max_time_diff_min = 5
+          )
+        },
+        error = function(e) {
+          use_aws <<- FALSE
+          ifcb_get_ferrybox_data(
+            missing_position$timestamp,
+            ferrybox_path,
+            max_time_diff_min = 5
+          )
+        }
+      )
+      
+      if (use_aws) {
+        # Identify rows that are missing after getting AWS data
+        still_missing_positions <- ferrybox_positions %>%
+          filter(is.na(gpsLatitude)) %>%
+          filter(is.na(gpsLongitude))
+        
+        # Get data from SveaFB files
+        ferrybox_positions_fb <- ifcb_get_ferrybox_data( missing_position$timestamp,
+                                                         ferrybox_path,
+                                                         max_time_diff_min = 5) %>%
+          rename(gpsLatitude_fb = gpsLatitude,
+                 gpsLongitude_fb = gpsLongitude)
+        
+        # Join with AWS data
+        ferrybox_positions <- ferrybox_positions %>%
+          left_join(ferrybox_positions_fb, by = "timestamp") %>%
+          mutate(gpsLatitude = coalesce(gpsLatitude, gpsLatitude_fb),
+                 gpsLongitude = coalesce(gpsLongitude, gpsLongitude_fb)) %>%
+          select(-gpsLongitude_fb, -gpsLatitude_fb)
+      }
+      
+      # Rename GPS latitude and longitude columns in ferrybox_positions to avoid conflicts
+      ferrybox_positions <- ferrybox_positions %>%
         rename(gpsLatitude_fb = gpsLatitude,
                gpsLongitude_fb = gpsLongitude)
       
-      # Join with AWS data
+      # Identify samples that could not get position from hdr nor ferrybox data
+      no_position <- missing_position %>%
+        left_join(ferrybox_positions, by = "timestamp") %>%
+        mutate(gpsLatitude = coalesce(gpsLatitude, gpsLatitude_fb),
+               gpsLongitude = coalesce(gpsLongitude, gpsLongitude_fb)) %>%
+        select(-gpsLongitude_fb, -gpsLatitude_fb) %>%
+        filter(is.na(gpsLatitude)) %>%
+        pull(sample)
+      
+      # Add comment
       ferrybox_positions <- ferrybox_positions %>%
-        left_join(ferrybox_positions_fb, by = "timestamp") %>%
+        filter(!is.na(gpsLatitude_fb)) %>%
+        mutate(comment = "GPS location originates from ferrybox data")
+      
+      # Merge hdr_data with ferrybox_positions based on timestamps
+      hdr_data <- hdr_data %>%
+        mutate(gpsLatitude = ifelse(sample %in% no_position, -999, gpsLatitude),
+               gpsLongitude = ifelse(sample %in% no_position, -999, gpsLongitude)) %>%
+        left_join(ferrybox_positions, by = "timestamp") %>%
         mutate(gpsLatitude = coalesce(gpsLatitude, gpsLatitude_fb),
                gpsLongitude = coalesce(gpsLongitude, gpsLongitude_fb)) %>%
         select(-gpsLongitude_fb, -gpsLatitude_fb)
+      
     }
     
-    # Rename GPS latitude and longitude columns in ferrybox_positions to avoid conflicts
-    ferrybox_positions <- ferrybox_positions %>%
-      rename(gpsLatitude_fb = gpsLatitude,
-             gpsLongitude_fb = gpsLongitude)
+    # Add position and PSD flags to metadata
+    bins_metadata <- bin_cruises %>%
+      left_join(hdr_data, by = c("pid" = "sample")) %>%
+      # left_join(psd_flags, by = c("pid" = "sample")) %>%
+      rename(latitude = gpsLatitude,
+             longitude = gpsLongitude,
+             cruise = cruise_no) %>%
+      mutate(depth = 4,
+             # qc_bad = ifelse(flag %in% skip_flags, TRUE, FALSE),
+             # skip = ifelse(flag %in% skip_flags, TRUE, FALSE),
+             qc_bad = NA,
+             skip = ifelse(pid %in% blacklist, TRUE, FALSE),
+             sample_type = "underway",
+             in_baltic = ifelse(latitude == -999, "missing_position", ifcb_is_in_basin(latitude, longitude))) %>%
+      mutate(tag = ifelse(in_baltic, "baltic", "skagerrak_kattegat")) %>%
+      mutate(tag = ifelse(in_baltic == "missing_position", "missing_position", tag)) %>%
+      select(pid, latitude, longitude, depth, qc_bad, skip, sample_type, cruise, tag, any_of("comment"))
     
-    # Identify samples that could not get position from hdr nor ferrybox data
-    no_position <- missing_position %>%
-      left_join(ferrybox_positions, by = "timestamp") %>%
-      mutate(gpsLatitude = coalesce(gpsLatitude, gpsLatitude_fb),
-             gpsLongitude = coalesce(gpsLongitude, gpsLongitude_fb)) %>%
-      select(-gpsLongitude_fb, -gpsLatitude_fb) %>%
-      filter(is.na(gpsLatitude)) %>%
-      pull(sample)
+    # Identify which bins to skip based on blacklist
+    skipped <- blacklist[!str_detect(blacklist, "^D\\d{8}$")]
+    skipped <- skipped[grepl(paste0("^D", year), skipped)]
+    skipped <- unique(c(skipped, skip_bins))
     
-    # Add comment
-    ferrybox_positions <- ferrybox_positions %>%
-      filter(!is.na(gpsLatitude_fb)) %>%
-      mutate(comment = "GPS location originates from ferrybox data")
+    # Create a df with the blacklisted samples
+    skip_df <- tibble(pid = skipped,
+                      depth = 4,
+                      qc_bad = TRUE,
+                      skip = TRUE,
+                      sample_type = "underway") %>%
+      filter(!pid %in% bins_metadata$pid)
     
-    # Merge hdr_data with ferrybox_positions based on timestamps
-    hdr_data <- hdr_data %>%
-      mutate(gpsLatitude = ifelse(sample %in% no_position, -999, gpsLatitude),
-             gpsLongitude = ifelse(sample %in% no_position, -999, gpsLongitude)) %>%
-      left_join(ferrybox_positions, by = "timestamp") %>%
-      mutate(gpsLatitude = coalesce(gpsLatitude, gpsLatitude_fb),
-             gpsLongitude = coalesce(gpsLongitude, gpsLongitude_fb)) %>%
-      select(-gpsLongitude_fb, -gpsLatitude_fb)
+    # Append to metadata
+    metadata_db <- bind_rows(bins_metadata, skip_df) %>%
+      # bind_rows(skip_df) %>%
+      filter(!str_detect(pid, "^D\\d{8}$"))
     
+    # Find commented rows
+    ferrybox_origin <- metadata_db %>%
+      filter(!is.na(comment))
+    
+    # Download current sample metadata
+    current_metadata <- ifcb_download_dashboard_metadata("https://ifcb-dashboard-utv.smhi.se/", "RV_Svea")
+    
+    # Find samples that are already commented
+    already_commented <- current_metadata %>%
+      filter(pid %in% ferrybox_origin$pid) %>%
+      filter(grepl("GPS location originates from ferrybox data", comment_summary))
+    
+    # Remove comment if sample already commented
+    metadata_db <- metadata_db %>%
+      mutate(comment = ifelse(pid %in% already_commented$pid, NA, comment))
+    
+    # Write Dashboard metadata
+    write_csv(metadata_db,
+              metadata_file,
+              na = "")
   }
-  
-  # Add position and PSD flags to metadata
-  bins_metadata <- bin_cruises %>%
-    left_join(hdr_data, by = c("pid" = "sample")) %>%
-    # left_join(psd_flags, by = c("pid" = "sample")) %>%
-    rename(latitude = gpsLatitude,
-           longitude = gpsLongitude,
-           cruise = cruise_no) %>%
-    mutate(depth = 4,
-           # qc_bad = ifelse(flag %in% skip_flags, TRUE, FALSE),
-           # skip = ifelse(flag %in% skip_flags, TRUE, FALSE),
-           qc_bad = NA,
-           skip = ifelse(pid %in% blacklist, TRUE, FALSE),
-           sample_type = "underway",
-           in_baltic = ifelse(latitude == -999, "missing_position", ifcb_is_in_basin(latitude, longitude))) %>%
-    mutate(tag = ifelse(in_baltic, "baltic", "skagerrak_kattegat")) %>%
-    mutate(tag = ifelse(in_baltic == "missing_position", "missing_position", tag)) %>%
-    select(pid, latitude, longitude, depth, qc_bad, skip, sample_type, cruise, tag, any_of("comment"))
-  
-  # Identify which bins to skip based on blacklist
-  skipped <- blacklist[!str_detect(blacklist, "^D\\d{8}$")]
-  skipped <- skipped[grepl(paste0("^D", year), skipped)]
-  
-  # Create a df with the blacklisted samples
-  skip_df <- tibble(pid = skipped,
-                    depth = 4,
-                    qc_bad = TRUE,
-                    skip = TRUE,
-                    sample_type = "underway") %>%
-    filter(!pid %in% bins_metadata$pid)
-  
-  # Append to metadata
-  metadata_db <- bind_rows(bins_metadata, skip_df) %>%
-    # bind_rows(skip_df) %>%
-    filter(!str_detect(pid, "^D\\d{8}$"))
-  
-  # Find commented rows
-  ferrybox_origin <- metadata_db %>%
-    filter(!is.na(comment))
-  
-  # Download current sample metadata
-  current_metadata <- ifcb_download_dashboard_metadata("https://ifcb-dashboard-utv.smhi.se/", "RV_Svea")
-  
-  # Find samples that are already commented
-  already_commented <- current_metadata %>%
-    filter(pid %in% ferrybox_origin$pid) %>%
-    filter(grepl("GPS location originates from ferrybox data", comment_summary))
-  
-  # Remove comment if sample already commented
-  metadata_db <- metadata_db %>%
-    mutate(comment = ifelse(pid %in% already_commented$pid, NA, comment))
-  
-  # Write Dashboard metadata
-  write_csv(metadata_db,
-            metadata_file,
-            na = "")
 }
 
 # -------------------------------
@@ -423,20 +434,16 @@ if (length(bins_to_process) > 0) {
 
 # Only extract features if there a any new files to process
 if (length(bins_to_process) > 0) {
-  
-  # Add root repo to sys.path
-  py_run_string("import sys; sys.path.append('C:/R/ifcb-data-pipeline/code/python/ifcb-features')")
-  
-  # Import function to extract all features
-  extract_slim_features <- import("extract_slim_features")
-  
+
   cat("Extracting features...\n")
   
   # Extract v4 features
-  extract_slim_features$extract_and_save_all_features(as.character(raw_folder),
-                                                      as.character(feature_folder),
-                                                      as.character(blobs_folder),
-                                                      bins = as.list(bins_to_process))
+  ifcb_extract_features(data_folder = as.character(raw_folder),
+                        features_folder = as.character(feature_folder),
+                        blobs_folder = as.character(blobs_folder),
+                        bins = as.list(bins_to_process),
+                        parallel = TRUE,
+                        n_cores = 3)
 }
 
 # -------------------------------
@@ -519,6 +526,45 @@ if (length(bins_to_psd) > 0) {
   write_csv(psd_fits, psd_fits_file, progress = FALSE)
   write_csv(psd_data, psd_data_file, progress = FALSE)
 }
+
+# -------------------------------
+# Classify images
+# -------------------------------
+
+# if (length(bins_to_process) > 0) {
+#   
+#   # Find already classified files
+#   class_files <- list.files(class_folder, ".h5")
+#   class_bins <- gsub("_class.h5", "", class_files)
+#   
+#   # Check file sizes
+#   file_sizes <- file.size(roi_files)
+#   
+#   # Identify bins with 0 KB files
+#   empty_bins <- unique(str_extract(roi_files[file_sizes == 0], "D\\d{8}T\\d{6}_IFCB\\d+"))
+#   
+#   # Identify files to classify
+#   files_to_classify <- tibble(file = roi_files) %>%
+#     filter(!str_detect(file, str_c(class_bins, collapse = "|"))) %>%
+#     filter(!str_detect(file, str_c(skipped, collapse = "|"))) %>%
+#     filter(!str_detect(file, str_c(empty_bins, collapse = "|"))) %>%
+#     pull(file)
+#   
+#   if (!dir.exists(class_folder)) {
+#     dir.create(class_folder, recursive = TRUE)
+#   }
+#   
+#   cat("Classifying images...\n")
+#   
+#   for (bin in files_to_classify) {
+#     ifcb_save_classification(roi_file = bin,
+#                              output_folder = class_folder,
+#                              format = "h5",
+#                              gradio_url = "https://ifcb.serve.scilifelab.se/",
+#                              model_name = cnn_model,
+#                              verbose = FALSE)
+#   }
+# }
 
 # -------------------------------
 # Log successful completion

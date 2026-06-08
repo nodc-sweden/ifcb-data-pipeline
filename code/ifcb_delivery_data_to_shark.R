@@ -20,16 +20,28 @@ suppressPackageStartupMessages({
   library(curl, quietly = TRUE)
   library(ggplot2, quietly = TRUE)
   library(tidyr, quietly = TRUE)
+  library(ClassiPyR, quietly = TRUE)
+  library(hdf5r, quietly = TRUE)
+  library(jsonlite, quietly = TRUE)
+  library(DBI, quietly = TRUE)
 })
+
+source("code/utils/clean_taxa_fn.R")
 
 # -------------------------------
 # Configuration
 # -------------------------------
 
-remove_flagged_data <- c("bubbles", "incomplete", "near land")
+internal_use <- FALSE
+cnn_model <- "SMHI-NIVA-SYKE-SAMS-SZN-ResNet50-V6" # niva_smhi_baltic or NA for MATLAB
+threshold_file <- "V6/V6-resnet50_dataset_squarepad_augmented_b64_lr0.0001_e20_thresholds_and_metrics.json"
+classlist_file <- "V6-resnet50_dataset_squarepad_augmented_b64_lr0.0001_e20_classes.txt"
+instrument_number <- "IFCB134"
 
 year <- as.numeric(format(Sys.Date(), "%Y"))
-class_score_version <- 1
+# year <- 2026
+
+remove_flagged_data <- c("bubbles", "incomplete", "near land")
 
 ifcb_path <- Sys.getenv("ifcb_path")
 ifcb_base_path <- Sys.getenv("ifcb_base_path")
@@ -41,7 +53,13 @@ at_email <- Sys.getenv("at_email")
 bk_email <- Sys.getenv("bk_email")
 ifcb_email <- Sys.getenv("ifcb_email")
 
-output_folder <- file.path(havgem_path, "data_to_shark", "auto_processed")
+if (internal_use) {
+  output_folder <- file.path(havgem_path, "data_internal")
+} else {
+  output_folder <- file.path(havgem_path, "data_to_shark")
+}
+
+output_folder <- file.path(output_folder, cnn_model)
 
 # Define data deliviery path
 data_delivery_path <- file.path(output_folder, 
@@ -54,7 +72,7 @@ processed_data <- file.path(data_delivery_path, "processed_data")
 received_data <- file.path(data_delivery_path, "received_data")
 correspondence <- file.path(data_delivery_path, "correspondence")
 
-feature_folder <- file.path(ifcb_path, "features", year)
+feature_folder <- file.path(ifcb_path, "features", "v2", year)
 raw_folder <- file.path(ifcb_path, "data", year)
 psd_plot_folder <- file.path(ifcb_path, "psd", "figures", year)
 metadata_folder <- file.path(ifcb_path, "ifcbdb_metadata")
@@ -63,19 +81,12 @@ blacklist_file <- file.path(repo_dir, "data", "sample_blacklist.tsv")
 psd_data_file <- file.path(ifcb_path, "psd", paste0("psd_", year, "_data.csv"))
 psd_fits_file <- file.path(ifcb_path, "psd", paste0("psd_", year, "_fits.csv"))
 psd_flags_file <- file.path(ifcb_path, "psd", paste0("psd_", year, "_flags.csv"))
+threshold_file <- file.path(ifcb_path, "pytorch", "models", threshold_file)
+classlist_file <- file.path(ifcb_path, "pytorch", "models", classlist_file)
 
-manual_folder_baltic <- file.path(ifcb_path, "manual", "Baltic")
-manual_folder_westcoast <- file.path(ifcb_path, "manual", "Skagerrak-Kattegat")
+sqlite_path <- file.path(tools::R_user_dir("ClassiPyR", "data"), "annotations.sqlite")
 
-# Define path to class2use files
-class2use_file_baltic <- file.path(ifcb_path, "config", "class2use_Baltic.mat")
-class2use_file_westcoast <- file.path(ifcb_path, "config", "class2use_Skagerrak-Kattegat.mat")
-
-# Define the path for the combined classification folder for the specific year and class score version
-class_folder <- file.path(ifcb_path, 
-                          "classified", 
-                          "Baltic-Skagerrak-Kattegat-dashboard", 
-                          paste0("class", year, "_v", class_score_version))
+class_folder <- file.path(ifcb_path, "classified", cnn_model)
 
 # Define the URL of a EEA shapefile and the target directory
 url <- "https://www.eea.europa.eu/data-and-maps/data/eea-coastline-for-analysis-2/gis-data/eea-coastline-polygon/at_download/file"
@@ -106,15 +117,16 @@ if (!file.exists(shapefile_path)) {
 }
 
 # Taxa that should be forced to be regarded as diatoms, as they are not according to WoRMS
-diatom_include = c("Actinocyclus_spp", "Actinocyclus", "Navicula-like", "Navicula")
+diatom_include = c("Actinocyclus_spp", "Actinocyclus", "Navicula-like", "Navicula", "cf_Proboscia_rhizosolenia")
 
 # -------------------------------
 # Get data
 # -------------------------------
 
 # List already merged class files
-combined_class_files <- list.files(class_folder, ".mat", full.names = TRUE)
-class_bins <- gsub(paste0("_class_v", class_score_version, ".mat"), "", basename(combined_class_files))
+combined_class_files <- list.files(class_folder, ".h5", full.names = TRUE, recursive = TRUE)
+combined_class_files <- combined_class_files[grepl(paste0("D", year), basename(combined_class_files))]
+class_bins <- gsub("_class.h5", "", basename(combined_class_files))
 
 # Download sample metadata
 metadata <- ifcb_download_dashboard_metadata("https://ifcb-dashboard-utv.smhi.se/", "RV_Svea")
@@ -149,17 +161,27 @@ if (file.exists(file.path(processed_data, "data.txt"))) {
 
 cat("Calculating distance from land...\n")
 
-# Add geographical information to metadata
-metadata_selected <- metadata_selected %>%
-  mutate(in_baltic = ifelse(latitude == -999, "missing_position", iRfcb::ifcb_is_in_basin(latitude, longitude)),
-         near_land = iRfcb::ifcb_is_near_land(
-           latitude,
-           longitude,
-           distance = 500, # Släggö is about 600 m from Land
-           shape = shapefile_path))
+valid_idx <- metadata_selected$latitude != -999 & metadata_selected$longitude != -999
+
+# Preallocate
+metadata_selected$near_land <- NA
+
+# Only run function on valid positions
+metadata_selected$near_land[valid_idx] <- as.character(
+  iRfcb::ifcb_is_near_land(
+    latitudes = metadata_selected$latitude[valid_idx],
+    longitudes = metadata_selected$longitude[valid_idx],
+    distance = 500,
+    shape = shapefile_path
+  )
+)
+
+# Mark the invalid ones
+metadata_selected$near_land[!valid_idx] <- NA
 
 # Read PSD flags
-psd_flags <- read_csv(psd_flags_file, show_col_types = FALSE, progress = FALSE, name_repair = "unique_quiet")
+psd_flags <- read_csv(psd_flags_file, show_col_types = FALSE, progress = FALSE, name_repair = "unique_quiet") %>%
+  dplyr::select(-dplyr::any_of("...1"))
 
 # Select ferrybox parameters to retrieve
 ferrybox_parameters <- c("70", "80070", "8063", "88063", "8165", "88165", "8173", 
@@ -176,30 +198,31 @@ cat("Getting ferrybox data...\n")
 ferrybox_data <- ifcb_get_ferrybox_data(timestamps, ferrybox_path, parameters = ferrybox_parameters,
                                         max_time_diff_min = 5)
 
-# Set as NA if QC is not 1 (=Good)
-ferrybox_data <- ferrybox_data %>%
-  mutate(`80070` = ifelse(`70` == 1, `80070`, NA),
-         `8063` = ifelse(`88063` == 1, `8063`, NA),
-         `8165` = ifelse(`88165` == 1, `8165`, NA),
-         `8173` = ifelse(`88173` == 1, `8173`, NA),
-         `8166` = ifelse(`88166` == 1, `8166`, NA),
-         `8172` = ifelse(`88172` == 1, `8172`, NA),
-         `8174` = ifelse(`88174` == 1, `8174`, NA),
-         `8177` = ifelse(`88177` == 1, `8177`, NA),
-         `8179` = ifelse(`88179` == 1, `8179`, NA),
-         `8181` = ifelse(`88181` == 1, `8181`, NA),
-         `8190` = ifelse(`88190` == 1, `8190`, NA),
-         `8191` = ifelse(`88191` == 1, `8191`, NA),
-  )
+if (!internal_use) {
+  # Set as NA if QC is not 1 (=Good)
+  ferrybox_data <- ferrybox_data %>%
+    mutate(`80070` = ifelse(`70` == 1, `80070`, NA),
+           `8063` = ifelse(`88063` == 1, `8063`, NA),
+           `8165` = ifelse(`88165` == 1, `8165`, NA),
+           `8173` = ifelse(`88173` == 1, `8173`, NA),
+           `8166` = ifelse(`88166` == 1, `8166`, NA),
+           `8172` = ifelse(`88172` == 1, `8172`, NA),
+           `8174` = ifelse(`88174` == 1, `8174`, NA),
+           `8177` = ifelse(`88177` == 1, `8177`, NA),
+           `8179` = ifelse(`88179` == 1, `8179`, NA),
+           `8181` = ifelse(`88181` == 1, `8181`, NA),
+           `8190` = ifelse(`88190` == 1, `8190`, NA),
+           `8191` = ifelse(`88191` == 1, `8191`, NA),
+    )
+}
 
 # Add ferrybox data to metadata
 metadata_selected <- bind_cols(metadata_selected, ferrybox_data)
 
 cat("Calculating biovolume and biomass data...\n")
 
-# Summarize biovolume and biomass data
 biovolumes <- ifcb_summarize_biovolumes(feature_folder = feature_folder,
-                                        mat_files = combined_class_files,
+                                        class_files = combined_class_files,
                                         hdr_folder = raw_folder,
                                         micron_factor = 1 / 3.4,
                                         diatom_class = "Bacillariophyceae",
@@ -209,174 +232,56 @@ biovolumes <- ifcb_summarize_biovolumes(feature_folder = feature_folder,
                                         verbose = TRUE,
                                         drop_zero_volume = TRUE)
 
-# List manual Baltic files
-manual_files_baltic <- list.files(manual_folder_baltic, ".mat", recursive = FALSE, full.names = TRUE)
-manual_files_baltic <- manual_files_baltic[grepl(paste0("/D", year), manual_files_baltic)]
+# Read manual annotations from SQlite database
+con <- dbConnect(RSQLite::SQLite(), sqlite_path)
+annotations <- dbReadTable(con, "annotations")
+dbDisconnect(con)
 
-# Summarize data
-if (length(manual_files_baltic) > 0) {
-  cat("Calculating biovolume and biomass data for manual data...\n")
-  
-  manual_biovolumes_baltic <- ifcb_summarize_biovolumes(
+annotations <- annotations %>%
+  filter(grepl(paste0("D", year), sample_name)) %>%
+  filter(grepl(paste0(instrument_number), sample_name)) %>%
+  mutate(image_name = paste0(sample_name, "_", sprintf("%05d", roi_number)))
+
+if (nrow(annotations) > 0) {
+  manual_biovolumes <- ifcb_summarize_biovolumes(
     feature_folder = feature_folder,
-    mat_files = manual_files_baltic,
-    class2use_file = class2use_file_baltic,
+    custom_images = annotations$image_name,
+    custom_classes = annotations$class_name,
     hdr_folder = raw_folder,
-    mat_recursive = FALSE,
     use_python = FALSE,
     verbose = TRUE,
     drop_zero_volume = FALSE
   )
-} else {
-  manual_biovolumes_baltic <- data.frame(sample = character(), class = character())
 }
 
-# List manual Skagerrak-Kattegat files
-manual_files_westcoast <- list.files(manual_folder_westcoast, ".mat", recursive = FALSE, full.names = TRUE)
-manual_files_westcoast <- manual_files_westcoast[grepl(paste0("/D", year), manual_files_westcoast)]
-
-# Summarize data
-if (length(manual_files_baltic) > 0) {
-  manual_biovolumes_westcoast <- ifcb_summarize_biovolumes(
-    feature_folder = feature_folder,
-    mat_files = manual_files_westcoast,
-    class2use_file = class2use_file_westcoast,
-    hdr_folder = raw_folder,
-    mat_recursive = FALSE,
-    use_python = FALSE,
-    verbose = TRUE,
-    drop_zero_volume = FALSE
-  )
-} else {
-  manual_biovolumes_westcoast <- data.frame(sample = character(), class = character())
-}
-
-# Bind manual data together
-manual_biovolumes <- bind_rows(manual_biovolumes_baltic, manual_biovolumes_westcoast)
-
-# Find samples in the Baltic sea
-baltic_samples <- metadata_selected %>%
-  filter(in_baltic) %>%
+# Find samples
+all_samples <- metadata_selected %>%
   pull(pid)
 
-# Find samples NOT in the baltic sea
-westcoast_samples <- metadata_selected %>%
-  filter(!in_baltic) %>%
-  pull(pid)
+# raw <-readLines(classlist_file)
 
-# Extract the classifier name from the first file in class_files
-classifier_baltic <- ifcb_get_mat_variable(combined_class_files[grepl(baltic_samples[1], combined_class_files)], "classifierName")[1]
-classifier_westcoast <- ifcb_get_mat_variable(combined_class_files[grepl(westcoast_samples[1], combined_class_files)], "classifierName")[1]
+# cnn_class_names <- iRfcb:::truncate_folder_name(gsub("^'|'$", "", raw))
 
-# Construct the class_score_file name based on threshold and classifier
-if (grepl("mat", classifier_baltic)) {
-  class_score_file_baltic <- gsub(".mat", "_opt.csv", classifier_baltic)
-} else {
-  class_score_file_baltic <- paste0(classifier_baltic, "_opt.csv")
-}
+class_scores <- fromJSON(threshold_file)$class_metrics |>
+  bind_rows(.id = "class")
 
-# Remap path to cross-platform path
-if (!ifcb_path == "Z:/data") {
-  
-  # Replace the backslashes with forward slashes for consistency
-  path_string <- gsub("\\\\", "/", class_score_file_baltic)
-  
-  # Replace volume path
-  path_string <- gsub("Z:/data", ifcb_path, path_string)
-  
-  # Split the path into components
-  path_components <- strsplit(path_string, "/")[[1]]
-  
-  # Reassemble the path using file.path
-  class_score_file_baltic <- do.call(file.path, as.list(path_components))
-}
-
-# Check if the class_score_file_baltic exists
-if (file.exists(class_score_file_baltic)) {
-  # Read the class scores from the CSV file
-  class_scores_baltic <- read_csv(class_score_file_baltic,
-                                  show_col_types = FALSE)
-} else {
-  # Create a data frame with unique class names and NA values for PR, PD, and PM
-  class_scores_baltic <- data.frame(class = unique(biovolume_data$class),
-                                    precision = NA,
-                                    detection_probability = NA,
-                                    miss_probability = NA)
-}
-
-# Calculate F1-score
-class_scores_baltic <- class_scores_baltic %>%
-  mutate_all(~ifelse(is.nan(.), NA, .)) %>%
-  mutate(f1 = 2 * (precision * detection_probability) / (precision + detection_probability),
-         in_baltic = TRUE) 
-
-# Construct the class_score_file name based on threshold and classifier
-if (grepl("mat", classifier_westcoast)) {
-  class_score_file_westcoast <- gsub(".mat", "_opt.csv", classifier_westcoast)
-} else {
-  class_score_file_westcoast <- paste0(classifier_westcoast, "_opt.csv")
-}
-
-# Remap path to cross-platform path
-if (!ifcb_path == "Z:/data") {
-  
-  # Replace the backslashes with forward slashes for consistency
-  path_string <- gsub("\\\\", "/", class_score_file_westcoast)
-  
-  # Replace volume path
-  path_string <- gsub("Z:/data", ifcb_path, path_string)
-  
-  # Split the path into components
-  path_components <- strsplit(path_string, "/")[[1]]
-  
-  # Reassemble the path using file.path
-  class_score_file_westcoast <- do.call(file.path, as.list(path_components))
-}
-
-# Check if the class_score_file_westcoast exists
-if (file.exists(class_score_file_westcoast)) {
-  # Read the class scores from the CSV file
-  class_scores_westcoast <- read_csv(class_score_file_westcoast,
-                                  show_col_types = FALSE)
-} else {
-  # Create a data frame with unique class names and NA values for PR, PD, and PM
-  class_scores_westcoast <- data.frame(class = unique(biovolume_data$class),
-                                    precision = NA,
-                                    detection_probability = NA,
-                                    miss_probability = NA)
-}
-
-# Calculate F1-score
-class_scores_westcoast <- class_scores_westcoast %>%
-  mutate_all(~ifelse(is.nan(.), NA, .)) %>%
-  mutate(f1 = 2 * (precision * detection_probability) / (precision + detection_probability),
-         in_baltic = FALSE) 
-
-# Bind data together in a single df
-class_scores <- bind_rows(class_scores_westcoast, class_scores_baltic)
-
-# List all .mat files in the class directory
-mat_files_baltic <- list.files(path = manual_folder_baltic, pattern = "\\.mat$", full.names = TRUE)
-mat_files_westcoast <- list.files(path = manual_folder_westcoast, pattern = "\\.mat$", full.names = TRUE)
-
-# Get analysis date from manual files
-mat_files <- c(mat_files_baltic, mat_files_westcoast)
-
-manual_analysis_dates <- data.frame(sample = NULL, analysis_date = NULL)
-for (mat in mat_files) {
-  file_info <- file.info(mat)$ctime
-  
-  temp <- data.frame(sample = sub(".mat$", "", basename(mat)), analysis_date = as.Date(file_info))
-  
-  manual_analysis_dates <- rbind(manual_analysis_dates, temp)
-}
+manual_analysis_dates <- annotations %>%
+  select(sample_name, annotator, timestamp) %>%
+  distinct() %>%
+  arrange(sample_name, timestamp) %>%
+  group_by(sample_name) %>%
+  slice_tail(n = 1) %>%
+  ungroup() %>%
+  mutate(analysis_date = as.Date(timestamp)) %>%
+  select(-timestamp) %>%
+  rename(sample = sample_name)
 
 # Get analysis date from autoclass files
 autoclass_analysis_dates <- data.frame(sample = NULL, analysis_date = NULL)
 for (mat in combined_class_files) {
   file_info <- file.info(mat)$ctime
   
-  temp <- data.frame(sample = sub(paste0("_class_v", class_score_version, ".mat$"), "", basename(mat)), analysis_date = as.Date(file_info))
+  temp <- data.frame(sample = sub("_class.h5", "", basename(mat)), analysis_date = as.Date(file_info))
   
   autoclass_analysis_dates <- rbind(autoclass_analysis_dates, temp)
 }
@@ -392,123 +297,13 @@ manual_taxa_names <- unique(manual_biovolumes$class)
 # Combine manual and class names
 taxa_names <- c(taxa_names, manual_taxa_names)
 
-# Clean taxa_names by substituting specific patterns with spaces or empty strings
-taxa_names_clean <- gsub("_", " ", taxa_names)
-taxa_names_clean <- gsub(" single cell", "", taxa_names_clean)
-taxa_names_clean <- gsub(" single", "", taxa_names_clean)
-taxa_names_clean <- gsub(" chain", "", taxa_names_clean)
-taxa_names_clean <- gsub(" coil", "", taxa_names_clean)
-taxa_names_clean <- gsub(" filament", "", taxa_names_clean)
-taxa_names_clean <- gsub(" pair", "", taxa_names_clean)
-taxa_names_clean <- gsub("-like", "", taxa_names_clean)
-taxa_names_clean <- gsub(" like", "", taxa_names_clean)
-taxa_names_clean <- gsub(" bundle", "", taxa_names_clean)
-taxa_names_clean <- gsub(" larger than 30", "", taxa_names_clean)
-taxa_names_clean <- gsub(" larger than 30unidentified", "", taxa_names_clean)
-taxa_names_clean <- gsub(" smaller than 30unidentified", "", taxa_names_clean)
-taxa_names_clean <- gsub(" smaller than 30", "", taxa_names_clean)
-
-# Remove species flags from class names
-taxa_names_clean <- gsub("\\<cf\\>", "", taxa_names_clean)
-taxa_names_clean <- gsub("\\<spp\\>", "", taxa_names_clean)
-taxa_names_clean <- gsub("\\<sp\\>", "", taxa_names_clean)
-taxa_names_clean <- gsub(" group", "", taxa_names_clean)
-taxa_names_clean <- gsub("  ", " ", taxa_names_clean)
-
-# Turn f to f. for forma
-taxa_names_clean <- gsub("\\bf\\b", "f.", taxa_names_clean)
-
-# Add "/" for multiple names with capital letters
-# e.g. Snowella_Woronichinia to Snowella/Woronichinia
-taxa_names_clean <- gsub(" ([A-Z])", "/\\1", taxa_names_clean)
-taxa_names_clean <- gsub(" ([A-Z])", "/\\1", taxa_names_clean)
-
-# Use the first name of combined classes, 
-# e.g. Nodularia_spumigena_coil,Nodularia_spumigena_filament to Nodularia spumigena
-taxa_names_clean <- sapply(strsplit(taxa_names_clean, ","), `[`, 1)
-
-# Remove any whitespace
-taxa_names_clean <- trimws(taxa_names_clean)
-
-# Retrieve worms records with retry mechanism
-worms_records <- ifcb_match_taxa_names(taxa_names_clean,
-                                       max_retries = 5,
-                                       sleep_time = 60,
-                                       marine_only = FALSE,
-                                       verbose = FALSE)
-
-# Extract Aphia IDs and class names from WoRMS
-aphia_id <- worms_records$AphiaID
-
-# Select relevant information from WoRMS
-worms_df <- bind_rows(worms_records) %>%
-  select(AphiaID, scientificname, rank, kingdom, phylum, class, order, family, genus, parentNameUsageID) %>%
-  rename(worms_kingdom = kingdom, worms_phylum = phylum, worms_class = class, worms_order = order,
-         worms_family = family, worms_genus = genus) %>%
+class_names <- clean_taxa(taxa_names) %>%
+  mutate(trophic_type = ifcb_get_trophic_type(cleaned_name)) %>%
+  rename(class_clean = cleaned_name,
+         scientificname = reported_name,
+         class = class_name,
+         sflag = flag) %>%
   distinct()
-
-# Create class_names data frame with taxa information
-class_names <- data.frame(class = taxa_names,
-                          class_clean = taxa_names_clean,
-                          aphia_id,
-                          sflag = ifelse(grepl("-like", taxa_names) | 
-                                           grepl("_cf_", taxa_names)| 
-                                           grepl("_like", taxa_names),
-                                         "CF", NA),
-                          is_diatom = ifcb_is_diatom(taxa_names_clean,
-                                                     diatom_include = diatom_include)) %>%
-  mutate(sflag = ifelse(grepl("\\<spp\\>", gsub("_", " ", taxa_names)), 
-                        paste(ifelse(is.na(sflag), "", sflag), "SPP"), 
-                        sflag)) %>%
-  mutate(sflag = ifelse(grepl("\\<group\\>", gsub("_", " ", taxa_names)), 
-                        paste(ifelse(is.na(sflag), "", sflag), "GRP"), 
-                        sflag)) %>%
-  mutate(sflag = ifelse(grepl("\\<sp\\>", gsub("_", " ", taxa_names)), 
-                        paste(ifelse(is.na(sflag), "", sflag), "SP"), 
-                        sflag)) %>%
-  mutate(sflag = str_trim(sflag)) %>%
-  mutate(trophic_type = ifcb_get_trophic_type(class_clean)) %>%
-  # left_join(class_scores, by = "class") %>%
-  left_join(worms_df, by = c("aphia_id" = "AphiaID")) %>%
-  mutate(
-    species_flag_taxon_name = case_when(
-      is.na(sflag) ~ NA,
-      sflag == "SPP" ~ paste(class_clean, "spp."),
-      sflag == "GRP" ~ paste(class_clean, "group"),
-      sflag == "CF" & rank == "Species" ~ sub(" ", " cf. ", class_clean), 
-      sflag == "CF" & rank == "Genus" ~ paste0(worms_order, ": ", worms_family, " cf. ", worms_genus),
-      TRUE ~ class_clean # Keeps class_clean as default
-    )
-  ) %>%
-  distinct() %>%
-  select(-rank, -worms_kingdom, -worms_phylum, 
-         -worms_order, -worms_family, -worms_genus)
-
-# Find all taxa classified with cf.
-cf_taxa <- class_names %>%
-  filter(sflag == "CF")
-
-parent_ids <- unique(cf_taxa$parentNameUsageID)[!is.na(unique(cf_taxa$parentNameUsageID))]
-
-# Extract parent records from cf. classes
-parent_records <- get_worms_records(parent_ids) %>%
-  select(AphiaID, scientificname) %>%
-  rename(parentNameUsageID = AphiaID,
-         parentName = scientificname)
-
-# Replace scientific names for cf. taxa with the parent names
-class_names <- class_names %>%
-  left_join(parent_records, by = "parentNameUsageID") %>%
-  mutate(scientificname_merge = parentName) %>%
-  mutate(scientificname_merge = coalesce(scientificname_merge, scientificname)) %>%
-  mutate(scientificname_merge = coalesce(scientificname_merge, class_clean)) %>%
-  mutate(aphia_id_merge = ifelse(is.na(parentName), NA, parentNameUsageID)) %>%
-  mutate(aphia_id_merge = coalesce(aphia_id_merge, aphia_id)) %>%
-  mutate(sflag = ifelse(sflag == "CF", NA, sflag)) %>%
-  select(-aphia_id, -scientificname, -parentName, -parentNameUsageID) %>%
-  rename(aphia_id = aphia_id_merge,
-         scientificname = scientificname_merge) %>%
-  arrange(class_clean)
 
 # -------------------------------
 # Join data
@@ -519,7 +314,7 @@ autoclass_joined <- biovolumes %>%
   left_join(select(metadata_selected, -ml_analyzed, -timestamp), by = c("sample" = "pid")) %>%
   left_join(psd_flags, by ="sample") %>%
   left_join(class_names, by = "class") %>%
-  left_join(class_scores, by = c("class", "in_baltic")) %>%
+  left_join(class_scores, by = "class") %>%
   left_join(autoclass_analysis_dates, by = "sample") %>%
   mutate(platform = "IFCB",
          verification = "PredictedByMachine",
@@ -527,7 +322,39 @@ autoclass_joined <- biovolumes %>%
          classifier_created_by = "Anders Torstensson",
          # classifier_used = paste0("SMHI-", params$classifier, " v.", max_versions[[i]]),
          metoa = "IMA-SW",
-         associated_media = NA)
+         associated_media = NA,
+         class_prog = "https://github.com/nodc-sweden/ifcb-pytorch-classify/releases/tag/v0.1.0")
+
+autoclass_aggregated <- autoclass_joined %>%
+  group_by(sample, scientificname) %>%
+  summarise(
+    # Sum the numeric measurements
+    counts = sum(counts, na.rm = TRUE),
+    biovolume_mm3 = sum(biovolume_mm3, na.rm = TRUE),
+    carbon_ug = sum(carbon_ug, na.rm = TRUE),
+    ml_analyzed = first(ml_analyzed),  # Should be identical per sample
+    counts_per_liter = sum(counts_per_liter, na.rm = TRUE),
+    biovolume_mm3_per_liter = sum(biovolume_mm3_per_liter, na.rm = TRUE),
+    carbon_ug_per_liter = sum(carbon_ug_per_liter, na.rm = TRUE),
+    
+    # Concatenate these fields
+    class = paste(class, collapse = ", "),
+    # class_id = paste(class_id, collapse = ", "),
+    threshold = paste(threshold, collapse = ", "),
+    precision = paste(precision, collapse = ", "),
+    recall = paste(recall, collapse = ",  "),
+    support = paste(support, collapse = ", "),
+    f1 = paste(round(f1, 3)*100, collapse = ", "),
+    
+    # Keep first value of all other columns (assumed identical)
+    across(
+      -c(counts, biovolume_mm3, carbon_ug, ml_analyzed, 
+         counts_per_liter, biovolume_mm3_per_liter, carbon_ug_per_liter,
+         class, precision, threshold, f1, recall, support),
+      first
+    ),
+    .groups = "drop"
+  )
 
 manual_joined <- manual_biovolumes %>%
   left_join(ifcb_convert_filenames(metadata_selected$pid), by ="sample") %>%
@@ -537,19 +364,45 @@ manual_joined <- manual_biovolumes %>%
   left_join(manual_analysis_dates, by = "sample") %>%
   mutate(platform = "IFCB",
          verification = "ValidatedByHuman",
-         verified_by = "Ann-Turi Skjevik",
+         verified_by = annotator,
          classifier_created_by = NA,
          classifier_used = NA,
          metoa = "IMA",
-         associated_media = ifelse(in_baltic, "https://ecotaxa.obs-vlfr.fr/prj/822", "https://ecotaxa.obs-vlfr.fr/prj/14392"))
+         associated_media = "https://ecotaxa.obs-vlfr.fr/prj/822, https://ecotaxa.obs-vlfr.fr/prj/14392",
+         class_prog = "https://github.com/EuropeanIFCBGroup/ClassiPyR/releases/tag/v0.2.1")
+
+# Aggregate based on scientific name
+manual_aggregated <- manual_joined %>%
+  group_by(sample, scientificname) %>%
+  summarise(
+    # Sum the numeric measurements
+    counts = sum(counts, na.rm = TRUE),
+    biovolume_mm3 = sum(biovolume_mm3, na.rm = TRUE),
+    carbon_ug = sum(carbon_ug, na.rm = TRUE),
+    ml_analyzed = first(ml_analyzed),  # Should be identical per sample
+    counts_per_liter = sum(counts_per_liter, na.rm = TRUE),
+    biovolume_mm3_per_liter = sum(biovolume_mm3_per_liter, na.rm = TRUE),
+    carbon_ug_per_liter = sum(carbon_ug_per_liter, na.rm = TRUE),
+    
+    # Concatenate these fields
+    class = paste(class, collapse = ","),
+    
+    # Keep first value of all other columns (assumed identical)
+    across(
+      -c(counts, biovolume_mm3, carbon_ug, ml_analyzed, 
+         counts_per_liter, biovolume_mm3_per_liter, carbon_ug_per_liter,
+         class),
+      first
+    ),
+    .groups = "drop"
+  )
 
 # Combine human verified data (manual annotations) with automatic classification
-if (nrow(manual_joined) > 0) {
-  data_aggregated <- bind_rows(autoclass_joined, manual_joined)
+if (nrow(manual_aggregated) > 0) {
+  data_aggregated <- bind_rows(autoclass_aggregated, manual_aggregated)
 } else {
-  data_aggregated <- autoclass_joined
+  data_aggregated <- autoclass_aggregated
 }
-
 
 # -------------------------------
 # Remove bad data
@@ -603,8 +456,13 @@ is_all_na <- function(x) {
 # Extract unclassified data and ferrybox data
 unclassified <- data_aggregated %>%
   filter(class_clean == "unclassified") %>%
-  select(-worms_class, -class_clean, -scientificname, -species_flag_taxon_name, -aphia_id, -sflag, -trophic_type, -is_diatom, -biovolume_mm3, -carbon_ug, 
-         -class, -precision, -detection_probability, -miss_probability, -f1, -carbon_ug_per_liter) %>%
+  select(
+    -worms_class, -class_clean, -scientificname, -species_flag_taxon_name, 
+    -aphia_id, -sflag, -trophic_type, -biovolume_mm3, 
+    -carbon_ug, -carbon_ug_per_liter,
+    -any_of(c("precision", "detection_probability", "miss_probability", 
+              "f1", "class_id", "threshold", "recall", "support"))
+  ) %>%
   rename(unclassified_counts = counts,
          unclassified_abundance = counts_per_liter,
          unclassified_volume = biovolume_mm3_per_liter,
@@ -735,8 +593,8 @@ shark_df <- shark_col %>%
          DATE_TIME = as.character(format(data_aggregated$timestamp, "%Y%m%d%H%M%S")),
          TIMEZONE = "UTC",
          STIME = data_aggregated$time,
-         LATIT = data_aggregated$latitude,
-         LONGI = data_aggregated$longitude,
+         LATIT = round(data_aggregated$latitude, 4),
+         LONGI = round(data_aggregated$longitude, 4),
          POSYS = "GPS",
          PDMET = "MIX",
          METFP = "NON",
@@ -757,7 +615,7 @@ shark_df <- shark_col %>%
          IMAGE_VERIFICATION = data_aggregated$verification,
          VERIFIED_BY = data_aggregated$verified_by,
          CLASS_NAME = data_aggregated$class,
-         CLASS_F1 = round(data_aggregated$f1*100, 3), # In percent
+         CLASS_F1 = data_aggregated$f1, # In percent
          COUNT = data_aggregated$counts, # COUNTS per SAMPLE
          COEFF = round(1000/data_aggregated$ml_analyzed, 1),
          ABUND = round(data_aggregated$counts_per_liter, 1), #COUNTS PER LITER
@@ -766,15 +624,16 @@ shark_df <- shark_col %>%
          BIOVOL = signif(data_aggregated$biovolume_mm3_per_liter, 6), # BIOVOLUME PER LITER
          METOA = data_aggregated$metoa,
          ASSOCIATED_MEDIA = data_aggregated$associated_media,
-         CLASSPROG = paste("https://github.com/hsosik/ifcb-analysis/releases/tag/v2.0"),
+         CLASSPROG = data_aggregated$class_prog,
          ALABO = "SMHI",
          ACKR_ANA = "N",
          ANADATE = data_aggregated$analysis_date,
-         METDC = paste("https://github.com/hsosik/ifcb-analysis",
+         METDC = paste("https://github.com/EuropeanIFCBGroup/ClassiPyR",
+                       "https://github.com/nodc-sweden/ifcb-pytorch-classify",
                        "https://github.com/kudelalab/PSD",
                        "https://github.com/EuropeanIFCBGroup/iRfcb",
                        sep = ", "), # METHOD
-         TRAINING_SET = "https://doi.org/10.17044/scilifelab.25883455.v4",
+         TRAINING_SET = "https://doi.org/10.17044/scilifelab.25883455.v6",
          CLASSIFIER_USED = basename(gsub("\\\\", "/", iconv(data_aggregated$classifier, from = "Windows-1252", to = "UTF-8"))),
          MANUAL_QC_DATE = as.Date(Sys.Date()),
          PRE_FILTER_SIZE ="150", # unit um
@@ -794,6 +653,22 @@ shark_df <- shark_col %>%
          OSAT_FB = round(data_aggregated$oxygen_saturation, 4),
          DOXY_FB = round(data_aggregated$oxygen_ml_l, 4)
   ) 
+
+if (internal_use) {
+  shark_df <- shark_df %>%
+    mutate(Q_PH_FB = data_aggregated$`80070`,
+           Q_CHL_FB = data_aggregated$`88063`,
+           Q_CDOM_FB = data_aggregated$`88165`,
+           Q_PHYC_FB = data_aggregated$`88173`,
+           Q_PHER_FB = data_aggregated$`88173`,
+           Q_WATERFLOW_FB = data_aggregated$`88172`,
+           Q_TURB_FB = data_aggregated$`88174`,
+           Q_PCO2_FB = data_aggregated$`88177`,
+           Q_TEMP_FB = data_aggregated$`88179`,
+           Q_PSAL_FB = data_aggregated$`88181`,
+           Q_OSAT_FB = data_aggregated$`88190`,
+           Q_DOXY_FB = data_aggregated$`88191`)
+}
 
 # -------------------------------
 # Data delivery
