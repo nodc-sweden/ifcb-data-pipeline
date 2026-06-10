@@ -443,12 +443,8 @@ if (length(bins_to_process) > 0) {
                         blobs_folder = as.character(blobs_folder),
                         bins = as.list(bins_to_process),
                         parallel = TRUE,
-                        n_cores = 3)
-  
-  # Rename files to allow process by IFCB Dashboard
-  old <- dir_ls(feature_folder, recurse = TRUE, regexp = "_features_v\\d+\\.csv$")
-  new <- gsub("_features_v", "_fea_v", old)
-  file_move(old, new)
+                        n_cores = 3,
+                        feature_tag = "fea")
 }
 
 # -------------------------------
