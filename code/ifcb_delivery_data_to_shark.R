@@ -631,6 +631,7 @@ shark_df <- shark_col %>%
          METDC = paste("https://github.com/EuropeanIFCBGroup/ClassiPyR",
                        "https://github.com/nodc-sweden/ifcb-pytorch-classify",
                        "https://github.com/kudelalab/PSD",
+                       "https://github.com/WHOIGit/ifcb-features/releases/tag/v1.0.0",
                        "https://github.com/EuropeanIFCBGroup/iRfcb",
                        sep = ", "), # METHOD
          TRAINING_SET = "https://doi.org/10.17044/scilifelab.25883455.v6",
