@@ -1,0 +1,745 @@
+---
+author: "Anders Torstensson"
+date: "`r Sys.Date()`"
+params: 
+  version: "1"
+ 
+output: html_document
+knit: (function(inputFile, encoding) {
+                        rmarkdown::render(inputFile,
+                        encoding=encoding, 
+                        output_file=paste0("output/html_reports/ifcb_image_export_report_",
+                        format(Sys.time(), "D%Y%m%dT%H%M"),
+                        ".html")) })
+title: "`r paste('ifcb-image-export-pipeline: Image library v.', params$version)`"
+---
+
+## Introduction
+
+This document summarizes the annotated image export process from the Imaging FlowCytobot (IFCB) to data repositories like [Figshare](https://figshare.scilifelab.se/) and [EcoTaxa](https://ecotaxa.obs-vlfr.fr/). This pipeline is used to update the [SMHI IFCB plankton image reference library](https://doi.org/10.17044/scilifelab.25883455) (Torstensson et al. 2024). 
+
+IFCB images has been manually labelled using the MATLAB package [`ifcb-analysis`](https://github.com/hsosik/ifcb-analysis) (Sosik and Olson 2007). The image export pipeline involves four key steps: extracting .png images organized in subfolders for each class, summarizing and writing image metadata, creating zip-archives for .png images, and creating zip-archives for MATLAB and raw data files. This process is facilitated by the R package [`iRfcb`](https://github.com/EuropeanIFCBGroup/iRfcb) (Torstensson 2024).
+
+## Setup
+
+```{r setup, echo = TRUE, message = FALSE, warning = FALSE, results = "hide"}
+# Setting options for 'knitr' package chunks to display code in the output
+knitr::opts_chunk$set(echo = TRUE)
+
+# Start time
+knit.time <- Sys.time()
+
+# Load required libraries
+library(iRfcb)
+library(tidyverse)
+library(worrms)
+library(reticulate)
+
+# Get data path to the ifcb data folder and your e-mail address
+ifcb_path <- "Z:/data/ifcb139" # Base path containing folders: classifier, raw, manual and features etc
+
+# Edit these
+taxonomist <- "Wenche Eikrem"
+taxonomist_email <- "wenche.eikrem@niva.no"
+```
+
+## Define Paths
+Here, we define the file paths needed for exporting the labelled images. These paths include directories for storing MATLAB manual and raw IFCB data.
+
+```{r define_paths}
+# Define stable paths
+features_folder <- file.path(ifcb_path, "features")
+data_folder <- file.path(ifcb_path, "raw")
+matlab_readme_file <- file.path("templates", "MATLAB-template.md")
+
+# Initialize vectors to store paths for each year
+manual_folders <- file.path(ifcb_path, "manual")
+png_folders <- file.path(ifcb_path, "png_images", Sys.Date())
+
+class2use_files <- file.path(ifcb_path, "classifier", "class2use_20250310.mat")
+readme_files <- file.path("templates", "README_NIVA.md")
+
+# Define results folders
+figshare_folder <- file.path(ifcb_path, "reference_library", "figshare", paste0("v", params$version))
+ecotaxa_folder <- file.path(ifcb_path, "reference_library", "ecotaxa", paste0("v", params$version))
+```
+
+## Extract PNG Images
+Here all annotated images are extracted as .png images. The extraction of .pngs to the iRfcb archive is skipped.
+
+```{r extract_pngs, warning=FALSE, results='asis'}
+# Start time
+start.time <- Sys.time()
+
+ifcb_extract_annotated_images(manual_folders,
+                              class2use_files,
+                              data_folder,
+                              iconv(png_folders, from = "UTF-8", to = "latin1"),
+                              skip_class = c("unclassified"),
+                              verbose = FALSE,
+                              overwrite = FALSE)
+
+# End time
+end.time <- Sys.time()
+runtime_extraction <- round(end.time - start.time, 2)
+```
+
+## Summarise image metadata
+
+```{r summarize_metadata}
+# Start time
+start.time <- Sys.time()
+
+# Summarize metadata for each image
+metadata <- ifcb_summarize_png_metadata(png_folders, 
+                                        features_folder, 
+                                        data_folder)
+
+# List all .mat files in the class directory
+mat_files <- list.files(path = manual_folders, pattern = "\\.mat$", full.names = TRUE)
+
+manual_analysis_dates <- data.frame(sample = NULL, analysis_date = NULL, analysis_time = NULL)
+for (mat in mat_files) {
+  file_info <- file.info(mat)$ctime
+  
+  temp <- data.frame(sample = sub(".mat$", "", basename(mat)),
+                     analysis_date = as.Date(file_info),
+                     analysis_time = format(ymd_hms(file_info), "%H:%M:%S"))
+  
+  manual_analysis_dates <- rbind(manual_analysis_dates, temp)
+}
+
+# Join metadata
+metadata <- metadata %>%
+  left_join(manual_analysis_dates, by = "sample")
+
+# End time
+end.time <- Sys.time()
+runtime_summarize_metadata <- round(end.time - start.time, 2)
+```
+
+## Cleaning and Matching Class Names
+Here, we clean the taxonomic class names and match them with records from the WoRMS database. This step ensures that the classifications are standardized and accurate.
+
+```{r class_names, message=FALSE}
+# Extract unique taxa names from biovolume_data and manual_data
+taxa_names <- unique(metadata$subfolder)
+
+# Clean taxa_names by substituting specific patterns with spaces or empty strings
+taxa_names_clean <- iRfcb:::truncate_folder_name(taxa_names)
+taxa_names_clean <- gsub("_", " ", taxa_names_clean)
+taxa_names_clean <- gsub(" single cell", "", taxa_names_clean)
+taxa_names_clean <- gsub(" single", "", taxa_names_clean)
+taxa_names_clean <- gsub(" chain", "", taxa_names_clean)
+taxa_names_clean <- gsub(" coil", "", taxa_names_clean)
+taxa_names_clean <- gsub(" heterotropic", "", taxa_names_clean)
+taxa_names_clean <- gsub(" filament", "", taxa_names_clean)
+taxa_names_clean <- gsub(" colony", "", taxa_names_clean)
+taxa_names_clean <- gsub(" pair", "", taxa_names_clean)
+taxa_names_clean <- gsub(" round", "", taxa_names_clean)
+taxa_names_clean <- gsub("-like", "", taxa_names_clean)
+taxa_names_clean <- gsub(" like", "", taxa_names_clean)
+taxa_names_clean <- gsub(" bundle", "", taxa_names_clean)
+taxa_names_clean <- gsub(" larger than 30", "", taxa_names_clean)
+taxa_names_clean <- gsub(" larger than 30unidentified", "", taxa_names_clean)
+taxa_names_clean <- gsub(" smaller than 30unidentified", "", taxa_names_clean)
+taxa_names_clean <- gsub(" smaller than 30", "", taxa_names_clean)
+
+# Remove species flags from class names
+taxa_names_clean <- gsub("\\<cf\\>", "", taxa_names_clean)
+taxa_names_clean <- gsub("\\<spp\\>", "", taxa_names_clean)
+taxa_names_clean <- gsub("\\<sp\\>", "", taxa_names_clean)
+taxa_names_clean <- gsub(" group", "", taxa_names_clean)
+taxa_names_clean <- gsub("  ", " ", taxa_names_clean)
+
+# Turn f to f. for forma
+taxa_names_clean <- gsub("\\bf\\b", "f.", taxa_names_clean)
+
+# Add "/" for multiple names with capital letters
+# e.g. Snowella_Woronichinia to Snowella/Woronichinia
+taxa_names_clean <- gsub(" ([A-Z])", "/\\1", taxa_names_clean)
+taxa_names_clean <- gsub(" ([A-Z])", "/\\1", taxa_names_clean)
+
+# Use the first name of combined classes,
+# e.g. Nodularia_spumigena_coil,Nodularia_spumigena_filament to Nodularia spumigena
+taxa_names_clean <- sapply(strsplit(taxa_names_clean, ","), `[`, 1)
+
+# Remove any whitespace
+taxa_names_clean <- trimws(taxa_names_clean)
+
+# Retrieve worms records with retry mechanism
+worms_records <- ifcb_match_taxa_names(taxa_names_clean,
+                                       max_retries = 3,
+                                       marine_only = FALSE)
+
+# Create class_names data frame with taxa information
+class_names <- data.frame(subfolder = taxa_names,
+                          class_clean = taxa_names_clean,
+                          aphia_id = worms_records$AphiaID,
+                          worms_class = worms_records$class,
+                          sflag = ifelse(grepl("-like", taxa_names) |
+                                           grepl("_cf_", taxa_names)|
+                                           grepl("_like", taxa_names),
+                                         "CF", NA)
+                          # is_diatom = ifcb_is_diatom(taxa_names_clean)
+                          ) %>%
+  mutate(sflag = ifelse(grepl("\\<spp\\>", gsub("_", " ", taxa_names)),
+                        paste(ifelse(is.na(sflag), "", sflag), "SPP"),
+                        sflag)) %>%
+  mutate(sflag = ifelse(grepl("\\<group\\>", gsub("_", " ", taxa_names)),
+                        paste(ifelse(is.na(sflag), "", sflag), "GRP"),
+                        sflag)) %>%
+  mutate(sflag = ifelse(grepl("\\<sp\\>", gsub("_", " ", taxa_names)),
+                        paste(ifelse(is.na(sflag), "", sflag), "SP"),
+                        sflag)) %>%
+  mutate(sflag = str_trim(sflag)) %>%
+  mutate(trophic_type = ifcb_get_trophic_type(class_clean)) %>%
+  distinct()
+```
+
+## Printing Class Summaries
+This section prints the cleaned and matched class names for each year, providing a summary that includes additional details such as trophic type and classification flags.
+
+```{r print_class_names, include=TRUE, results='asis'}
+class_names %>%
+  arrange(class_clean) %>%
+  knitr::kable(caption = paste("Class Summary"))
+```
+
+## Manage image metadata
+Here all the image metadata are gathered and stored in lists
+
+```{r wrange_metadata}
+# Join data in single df
+metadata = metadata %>%
+  left_join(class_names, by = "subfolder")
+  # left_join(cruise_numbers, by = "sample")
+
+metadata <- metadata %>%
+  mutate(annotated_by = taxonomist,
+         annotated_by_email = taxonomist_email,
+         ship = "M/S Color Fantasy")
+
+station_name <- NA
+sample_name <- paste0("MS_FB_", metadata$sample)
+depth <- 4
+source <- "flowthrough"
+
+ecotaxa_headers <- ifcb_get_ecotaxa_example()[0,]
+
+# Create a data frame with empty rows matching the length of data
+ecotaxa_headers[1:nrow(metadata),] <- NA
+
+# Map metadata to populate the empty dataframe
+ecotaxa_metadata <- ecotaxa_headers %>%
+  mutate(
+    
+    # Image fields
+    img_file_name = metadata$image,
+    
+    # Static information
+    object_link = NA,
+    object_annotation_status = "validated",
+    acq_resolution_pixels_per_micron = 3.4,
+    acq_instrument = "IFCB",
+    sample_source = source,
+    
+    # Software
+    process_soft = "MATLAB, R",
+    process_soft_version = paste0("R2022a, ", version$version.string),
+    process_library = "ifcb-analysis",
+    process_library_version = 2,
+    process_script = "iRfcb",
+    process_script_version = as.character(packageVersion("iRfcb")),
+    process_date = format(Sys.Date(),"%Y%m%d"),
+    process_time = format(Sys.time(),"%H%M%S"),
+    
+    # Object-related fields
+    object_id = tools::file_path_sans_ext(metadata$image),
+    object_roi_number = metadata$roi,
+    object_lat = metadata$gpsLatitude,
+    object_lon = metadata$gpsLongitude,
+    object_date = format(metadata$date, "%Y%m%d"),
+    object_time = gsub(":", "", metadata$time),
+    object_annotation_hierarchy = metadata$class_clean,
+    object_annotation_category = metadata$subfolder,
+    object_aphiaid = metadata$aphia_id,
+    object_annotation_date = format(metadata$analysis_date, "%Y%m%d"),
+    object_annotation_time = gsub(":", "", metadata$analysis_time),
+    object_annotation_person_name = metadata$annotated_by,
+    object_annotation_person_email = metadata$annotated_by_email,
+    
+    # Depth fields
+    object_depth_min = depth,
+    object_depth_max = depth,
+    
+    ### Sample fields
+    sample_vessel = metadata$ship,
+    sample_id = sample_name,
+    sample_station = station_name,
+    sample_cruise = metadata$cruise_number,
+    
+    ### Features fields
+    
+    # Unknown
+    object_pmt_scattering = NA,
+    object_pmt_fluorescence = NA,
+    
+    # Morphological metrics
+    object_area = metadata$Area,
+    object_biovolume = metadata$Biovolume,
+    object_perimeter = metadata$Perimeter,
+    object_bounding_box_xwidth = metadata$BoundingBox_xwidth,
+    object_bounding_box_ywidth = metadata$BoundingBox_ywidth,
+    object_convex_area = metadata$ConvexArea,
+    object_convex_perimeter = metadata$ConvexPerimeter,
+    object_feret_diameter = metadata$FeretDiameter,
+    object_major_axis_length = metadata$MajorAxisLength,
+    object_minor_axis_length = metadata$MinorAxisLength,
+    object_orientation = metadata$Orientation,
+    object_eccentricity = metadata$Eccentricity,
+    object_equiv_diameter = metadata$EquivDiameter,
+    object_extent = metadata$Extent,
+    object_r_wcenter2total_powerratio = metadata$RWcenter2total_powerratio,
+    object_r_whalfpowerintegral = metadata$RWhalfpowerintegral,
+    
+    # Miscellaneous fields
+    object_solidity = metadata$Solidity,
+    object_num_blobs = metadata$numBlobs,
+    object_h180 = metadata$H180,
+    object_h90 = metadata$H90,
+    object_hflip = metadata$Hflip,
+    object_summed_area = metadata$summedArea,
+    object_summed_biovolume = metadata$summedBiovolume,
+    object_summed_convex_area = metadata$summedConvexArea,
+    object_summed_convex_perimeter = metadata$summedConvexPerimeter,
+    object_summed_feret_diameter = metadata$summedFeretDiameter,
+    object_summed_major_axis_length = metadata$summedMajorAxisLength,
+    object_summed_minor_axis_length = metadata$summedMinorAxisLength,
+    object_summed_perimeter = metadata$summedPerimeter,
+    object_shapehist_kurtosis_norm_eq_d = metadata$shapehist_kurtosis_normEqD,
+    object_shapehist_mean_norm_eq_d = metadata$shapehist_mean_normEqD,
+    object_shapehist_median_norm_eq_d = metadata$shapehist_median_normEqD,
+    object_shapehist_mode_norm_eq_d = metadata$shapehist_mode_normEqD,
+    object_shapehist_skewness_norm_eq_d = metadata$shapehist_skewness_normEqD,
+    object_area_over_perimeter_squared = metadata$Area_over_PerimeterSquared,
+    object_area_over_perimeter = metadata$Area_over_Perimeter,
+    object_h90_over_hflip = metadata$H90_over_Hflip,
+    object_h90_over_h180 = metadata$H90_over_H180,
+    object_hflip_over_h180 = metadata$Hflip_over_H180,
+    object_summed_convex_perimeter_over_perimeter = metadata$summedConvexPerimeter_over_Perimeter,
+    object_rotated_bounding_box_solidity = metadata$rotated_BoundingBox_solidity,
+    object_rotated_area = metadata$RotatedArea,
+    object_rotated_bounding_box_xwidth = metadata$RotatedBoundingBox_xwidth,
+    object_rotated_bounding_box_ywidth = metadata$RotatedBoundingBox_ywidth,
+    
+    # Texture-related fields
+    object_texture_average_contrast = metadata$texture_average_contrast,
+    object_texture_average_gray_level = metadata$texture_average_gray_level,
+    object_texture_entropy = metadata$texture_entropy,
+    object_texture_smoothness = metadata$texture_smoothness,
+    object_texture_third_moment = metadata$texture_third_moment,
+    object_texture_uniformity = metadata$texture_uniformity,
+    
+    # Moment invariants
+    object_moment_invariant1 = metadata$moment_invariant1,
+    object_moment_invariant2 = metadata$moment_invariant2,
+    object_moment_invariant3 = metadata$moment_invariant3,
+    object_moment_invariant4 = metadata$moment_invariant4,
+    object_moment_invariant5 = metadata$moment_invariant5,
+    object_moment_invariant6 = metadata$moment_invariant6,
+    object_moment_invariant7 = metadata$moment_invariant7,
+    
+    # Ring fields
+    object_ring01 = metadata$Ring01,
+    object_ring02 = metadata$Ring02,
+    object_ring03 = metadata$Ring03,
+    object_ring04 = metadata$Ring04,
+    object_ring05 = metadata$Ring05,
+    object_ring06 = metadata$Ring06,
+    object_ring07 = metadata$Ring07,
+    object_ring08 = metadata$Ring08,
+    object_ring09 = metadata$Ring09,
+    object_ring10 = metadata$Ring10,
+    object_ring11 = metadata$Ring11,
+    object_ring12 = metadata$Ring12,
+    object_ring13 = metadata$Ring13,
+    object_ring14 = metadata$Ring14,
+    object_ring15 = metadata$Ring15,
+    object_ring16 = metadata$Ring16,
+    object_ring17 = metadata$Ring17,
+    object_ring18 = metadata$Ring18,
+    object_ring19 = metadata$Ring19,
+    object_ring20 = metadata$Ring20,
+    object_ring21 = metadata$Ring21,
+    object_ring22 = metadata$Ring22,
+    object_ring23 = metadata$Ring23,
+    object_ring24 = metadata$Ring24,
+    object_ring25 = metadata$Ring25,
+    object_ring26 = metadata$Ring26,
+    object_ring27 = metadata$Ring27,
+    object_ring28 = metadata$Ring28,
+    object_ring29 = metadata$Ring29,
+    object_ring30 = metadata$Ring30,
+    object_ring31 = metadata$Ring31,
+    object_ring32 = metadata$Ring32,
+    object_ring33 = metadata$Ring33,
+    object_ring34 = metadata$Ring34,
+    object_ring35 = metadata$Ring35,
+    object_ring36 = metadata$Ring36,
+    object_ring37 = metadata$Ring37,
+    object_ring38 = metadata$Ring38,
+    object_ring39 = metadata$Ring39,
+    object_ring40 = metadata$Ring40,
+    object_ring41 = metadata$Ring41,
+    object_ring42 = metadata$Ring42,
+    object_ring43 = metadata$Ring43,
+    object_ring44 = metadata$Ring44,
+    object_ring45 = metadata$Ring45,
+    object_ring46 = metadata$Ring46,
+    object_ring47 = metadata$Ring47,
+    object_ring48 = metadata$Ring48,
+    object_ring49 = metadata$Ring49,
+    object_ring50 = metadata$Ring50,
+    
+    # HOG fields
+    object_hog01 = metadata$HOG01,
+    object_hog02 = metadata$HOG02,
+    object_hog03 = metadata$HOG03,
+    object_hog04 = metadata$HOG04,
+    object_hog05 = metadata$HOG05,
+    object_hog06 = metadata$HOG06,
+    object_hog07 = metadata$HOG07,
+    object_hog08 = metadata$HOG08,
+    object_hog09 = metadata$HOG09,
+    object_hog10 = metadata$HOG10,
+    object_hog11 = metadata$HOG11,
+    object_hog12 = metadata$HOG12,
+    object_hog13 = metadata$HOG13,
+    object_hog14 = metadata$HOG14,
+    object_hog15 = metadata$HOG15,
+    object_hog16 = metadata$HOG16,
+    object_hog17 = metadata$HOG17,
+    object_hog18 = metadata$HOG18,
+    object_hog19 = metadata$HOG19,
+    object_hog20 = metadata$HOG20,
+    object_hog21 = metadata$HOG21,
+    object_hog22 = metadata$HOG22,
+    object_hog23 = metadata$HOG23,
+    object_hog24 = metadata$HOG24,
+    object_hog25 = metadata$HOG25,
+    object_hog26 = metadata$HOG26,
+    object_hog27 = metadata$HOG27,
+    object_hog28 = metadata$HOG28,
+    object_hog29 = metadata$HOG29,
+    object_hog30 = metadata$HOG30,
+    object_hog31 = metadata$HOG31,
+    object_hog32 = metadata$HOG32,
+    object_hog33 = metadata$HOG33,
+    object_hog34 = metadata$HOG34,
+    object_hog35 = metadata$HOG35,
+    object_hog36 = metadata$HOG36,
+    object_hog37 = metadata$HOG37,
+    object_hog38 = metadata$HOG38,
+    object_hog39 = metadata$HOG39,
+    object_hog40 = metadata$HOG40,
+    object_hog41 = metadata$HOG41,
+    object_hog42 = metadata$HOG42,
+    object_hog43 = metadata$HOG43,
+    object_hog44 = metadata$HOG44,
+    object_hog45 = metadata$HOG45,
+    object_hog46 = metadata$HOG46,
+    object_hog47 = metadata$HOG47,
+    object_hog48 = metadata$HOG48,
+    object_hog49 = metadata$HOG49,
+    object_hog50 = metadata$HOG50,
+    object_hog51 = metadata$HOG51,
+    object_hog52 = metadata$HOG52,
+    object_hog53 = metadata$HOG53,
+    object_hog54 = metadata$HOG54,
+    object_hog55 = metadata$HOG55,
+    object_hog56 = metadata$HOG56,
+    object_hog57 = metadata$HOG57,
+    object_hog58 = metadata$HOG58,
+    object_hog59 = metadata$HOG59,
+    object_hog60 = metadata$HOG60,
+    object_hog61 = metadata$HOG61,
+    object_hog62 = metadata$HOG62,
+    object_hog63 = metadata$HOG63,
+    object_hog64 = metadata$HOG64,
+    object_hog65 = metadata$HOG65,
+    object_hog66 = metadata$HOG66,
+    object_hog67 = metadata$HOG67,
+    object_hog68 = metadata$HOG68,
+    object_hog69 = metadata$HOG69,
+    object_hog70 = metadata$HOG70,
+    object_hog71 = metadata$HOG71,
+    object_hog72 = metadata$HOG72,
+    object_hog73 = metadata$HOG73,
+    object_hog74 = metadata$HOG74,
+    object_hog75 = metadata$HOG75,
+    object_hog76 = metadata$HOG76,
+    object_hog77 = metadata$HOG77,
+    object_hog78 = metadata$HOG78,
+    object_hog79 = metadata$HOG79,
+    object_hog80 = metadata$HOG80,
+    object_hog81 = metadata$HOG81,
+    
+    # Wedge fields
+    object_wedge01 = metadata$Wedge01,
+    object_wedge02 = metadata$Wedge02,
+    object_wedge03 = metadata$Wedge03,
+    object_wedge04 = metadata$Wedge04,
+    object_wedge05 = metadata$Wedge05,
+    object_wedge06 = metadata$Wedge06,
+    object_wedge07 = metadata$Wedge07,
+    object_wedge08 = metadata$Wedge08,
+    object_wedge09 = metadata$Wedge09,
+    object_wedge10 = metadata$Wedge10,
+    object_wedge11 = metadata$Wedge11,
+    object_wedge12 = metadata$Wedge12,
+    object_wedge13 = metadata$Wedge13,
+    object_wedge14 = metadata$Wedge14,
+    object_wedge15 = metadata$Wedge15,
+    object_wedge16 = metadata$Wedge16,
+    object_wedge17 = metadata$Wedge17,
+    object_wedge18 = metadata$Wedge18,
+    object_wedge19 = metadata$Wedge19,
+    object_wedge20 = metadata$Wedge20,
+    object_wedge21 = metadata$Wedge21,
+    object_wedge22 = metadata$Wedge22,
+    object_wedge23 = metadata$Wedge23,
+    object_wedge24 = metadata$Wedge24,
+    object_wedge25 = metadata$Wedge25,
+    object_wedge26 = metadata$Wedge26,
+    object_wedge27 = metadata$Wedge27,
+    object_wedge28 = metadata$Wedge28,
+    object_wedge29 = metadata$Wedge29,
+    object_wedge30 = metadata$Wedge30,
+    object_wedge31 = metadata$Wedge31,
+    object_wedge32 = metadata$Wedge32,
+    object_wedge33 = metadata$Wedge33,
+    object_wedge34 = metadata$Wedge34,
+    object_wedge35 = metadata$Wedge35,
+    object_wedge36 = metadata$Wedge36,
+    object_wedge37 = metadata$Wedge37,
+    object_wedge38 = metadata$Wedge38,
+    object_wedge39 = metadata$Wedge39,
+    object_wedge40 = metadata$Wedge40,
+    object_wedge41 = metadata$Wedge41,
+    object_wedge42 = metadata$Wedge42,
+    object_wedge43 = metadata$Wedge43,
+    object_wedge44 = metadata$Wedge44,
+    object_wedge45 = metadata$Wedge45,
+    object_wedge46 = metadata$Wedge46,
+    object_wedge47 = metadata$Wedge47,
+    object_wedge48 = metadata$Wedge48
+  )
+```
+
+## Write EcoTaxa tsv files
+This sections writes .tsv files containing metadata for each class subfolder
+
+```{r write_tsvs}
+for (i in seq_along(unique(ecotaxa_metadata$object_annotation_category))) {
+  
+  # Define path to subfolder
+  subfolder_path <- file.path(png_folders,
+                              unique(ecotaxa_metadata$object_annotation_category)[i])
+  
+  # Filter metadata for each class
+  ecotaxa_metadata_ix <- ecotaxa_metadata %>%
+    filter(object_annotation_category == unique(ecotaxa_metadata$object_annotation_category)[i]) %>%
+    mutate(object_annotation_category = iRfcb:::truncate_folder_name(object_annotation_category))
+  
+  # Add data format codes
+  ecotaxa_metadata_ix <- bind_rows(
+    ifcb_get_ecotaxa_example()[1, ] %>%
+      mutate(across(everything(), as.character)),
+    ecotaxa_metadata_ix %>%
+      mutate(across(everything(), as.character))
+  )
+  
+  # Write one metadata file per class subfolder
+  write_tsv(ecotaxa_metadata_ix,
+            file.path(
+              subfolder_path,
+              paste0("ecotaxa_",
+                     unique(iRfcb:::truncate_folder_name(ecotaxa_metadata$object_annotation_category))[i],
+                     ".tsv")),
+            na = "")
+}
+```
+
+## Zip EcoTaxa Images
+Here all the .png images are packaged in zip-archives suitable for EcoTaxa import. The packaging of .pngs to the iRfcb archive is skipped.
+
+```{r copy_ecotaxa}
+# Start time
+start.time <- Sys.time()
+
+zip_name <- file.path(ecotaxa_folder, "ecotaxa_niva.zip")
+
+# Create zip archive
+ifcb_zip_pngs(png_folder = png_folders,
+              zip_filename = zip_name,
+              print_progress = FALSE,
+              include_txt = TRUE,
+              split_zip = TRUE,
+              max_size = 500)
+
+cat("EcoTaxa image library stored in:", ecotaxa_folder, "\n")
+
+# End time
+end.time <- Sys.time()
+runtime_copy_ecotaxa <- round(end.time - start.time, 2)
+```
+
+## Zip PNG Images
+Here all the .png images are packaged in zip-archives. The packaging of .pngs to the iRfcb archive is skipped.
+
+```{r zip_png}
+# Start time
+start.time <- Sys.time()
+
+zip_filename <- file.path(figshare_folder, 
+                          paste0("niva_ifcb_annotated_images.zip"))
+
+ifcb_zip_pngs(png_folder = png_folders,
+              zip_filename = zip_filename,
+              readme_file = readme_files,
+              email_address = taxonomist_email,
+              version = params$version,
+              print_progress = FALSE,
+              include_txt = TRUE)
+
+# End time
+end.time <- Sys.time()
+runtime_zip_png <- round(end.time - start.time, 2)
+```
+
+## Zip MATLAB Files
+Here all the MATLAB and raw data files are packaged in zip-archives.
+
+```{r zip_matlab, echo=FALSE, warning=FALSE}
+# Start time
+start.time <- Sys.time()
+
+zip_filename <- file.path(figshare_folder, 
+                          paste0("niva_ifcb_matlab_files.zip"))
+
+ifcb_zip_matlab(manual_folder = manual_folders,
+                features_folder = features_folder,
+                class2use_file = class2use_files,
+                zip_filename = zip_filename,
+                data_folder = data_folder,
+                readme_file = readme_files,
+                matlab_readme_file = matlab_readme_file,
+                email_address = taxonomist_email,
+                version = params$version,
+                print_progress = FALSE)
+
+# End time
+end.time <- Sys.time()
+runtime_zip_matlab <- round(end.time - start.time, 2)
+runtime_knit <- round(end.time - knit.time, 2)
+```
+
+## Update README
+This sections reads a README template, counts annotations, updates the README contents and writes README.md to the output folder.
+
+```{r update_readme}
+# Read the template README.md content
+readme_content <- readLines("templates/README_NIVA_general.md", encoding = "UTF-8")
+
+# Count images
+counts <- ifcb_count_mat_annotations(manual_folders,
+                                     class2use_files,
+                                     skip_class = "unclassified")
+
+# List all .mat files in the specified folder (excluding subfolders)
+mat_files <- list.files(manual_folders, 
+                        pattern = "\\.mat$", 
+                        full.names = TRUE, 
+                        recursive = FALSE)
+
+# Extract dates from file paths and get the years
+dates <- str_extract(mat_files, "D\\d{8}")
+years <- as.integer(substr(dates, 2, 5))
+
+# Find the minimum and maximum year
+min_year <- min(years, na.rm = TRUE)
+max_year <- max(years, na.rm = TRUE)
+
+readme_df <- data.frame(classes = nrow(counts),
+                        images = sum(counts$n),
+                        min_year = min_year,
+                        max_year = max_year)
+
+# Update the README.md template placeholders
+updated_readme <- gsub("<DATE>", Sys.Date(), readme_content)
+updated_readme <- gsub("<VERSION>", params$version, updated_readme)
+updated_readme <- gsub("<E-MAIL>", taxonomist_email, updated_readme)
+updated_readme <- gsub("<YEAR>", year(Sys.Date()), updated_readme)
+updated_readme <- gsub("<YEAR_START_NIVA>", readme_df$min_year, updated_readme)
+updated_readme <- gsub("<YEAR_END_NIVA>", readme_df$max_year, updated_readme)
+updated_readme <- gsub("<N_IMAGES_NIVA>", formatC(readme_df$images, format = "d", big.mark = ","), updated_readme)
+updated_readme <- gsub("<CLASSES_NIVA>", readme_df$classes, updated_readme)
+
+# Write the updated content back to the README.md file
+writeLines(updated_readme, file.path(figshare_folder, "README.txt"), useBytes = TRUE)
+
+# Print table
+readme_df %>%
+    knitr::kable(caption = paste("Manual image class summary"))
+```
+
+## Create MANIFEST
+This section creates the MANIFEST.txt for the entire output folder.
+
+```{r create_manifest}
+ifcb_create_manifest(figshare_folder)
+
+# End time
+end.time <- Sys.time()
+runtime_knit <- round(end.time - knit.time, 2)
+```
+
+## Summarize Runtimes
+This section provides a summary of the time taken to run various parts of the script. This helps in identifying the computational efficiency of the pipeline.
+
+```{r runtime_summary}
+runtime_variables <- c("running the whole script",
+                       "extracting PNG images",
+                       "summarizing image metadata",
+                       "copying EcoTaxa image library",
+                       "zipping PNG files",
+                       "zipping MATLAB files")
+
+runtime_values <- c(runtime_knit, runtime_extraction, runtime_summarize_metadata, runtime_copy_ecotaxa, runtime_zip_png, runtime_zip_matlab)
+
+for (i in seq_along(runtime_variables)) {
+  cat("Time taken for ", runtime_variables[i], ": ", round(runtime_values[i]/3600, 2), "h", "\n", sep = "")
+}
+```
+
+## Reproducibility
+To ensure that the results can be reproduced in the future, this section records the session information, including the date and time when the script was run and details about the R environment used. This information is crucial for validating and reproducing the analysis.
+
+```{r reproducibility}
+# Date time
+cat("Time started:", format(knit.time), "\n")
+cat("Time finished:", format(Sys.time()), "\n")
+
+# Here we store the session info for this script
+sessioninfo::session_info()
+```
+
+## References
+- Sosik, H. M. and Olson, R. J. (2007), Automated taxonomic classification of phytoplankton sampled with imaging-in-flow cytometry. Limnol. Oceanogr: Methods 5, 204-216.
+- Torstensson (2024). I 'R' FlowCytobot (iRfcb): Tools for Analyzing and Processing Data from the IFCB. R package version 0.3.11. https://doi.org/10.5281/zenodo.12533225
+- Torstensson, Anders; Skjevik, Ann-Turi; Mohlin, Malin; Karlberg, Maria; Karlson, Bengt (2024). SMHI IFCB plankton image reference library. SciLifeLab. Dataset. doi:10.17044/scilifelab.25883455
+
+```{r citation, echo=FALSE}
+citation(package = "iRfcb")
+```
