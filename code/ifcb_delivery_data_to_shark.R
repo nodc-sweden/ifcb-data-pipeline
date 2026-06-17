@@ -72,7 +72,7 @@ processed_data <- file.path(data_delivery_path, "processed_data")
 received_data <- file.path(data_delivery_path, "received_data")
 correspondence <- file.path(data_delivery_path, "correspondence")
 
-feature_folder <- file.path(ifcb_path, "features", "v2", year)
+feature_folder <- file.path(ifcb_path, "features", "v4", year)
 raw_folder <- file.path(ifcb_path, "data", year)
 psd_plot_folder <- file.path(ifcb_path, "psd", "figures", year)
 metadata_folder <- file.path(ifcb_path, "ifcbdb_metadata")
@@ -224,11 +224,11 @@ cat("Calculating biovolume and biomass data...\n")
 biovolumes <- ifcb_summarize_biovolumes(feature_folder = feature_folder,
                                         class_files = combined_class_files,
                                         hdr_folder = raw_folder,
-                                        micron_factor = 1 / 3.4,
+                                        micron_factor = 1 / 2.77,
                                         diatom_class = "Bacillariophyceae",
                                         diatom_include = diatom_include,
                                         use_python = FALSE,
-                                        feature_version = 2,
+                                        feature_version = 4,
                                         verbose = TRUE,
                                         drop_zero_volume = TRUE)
 
