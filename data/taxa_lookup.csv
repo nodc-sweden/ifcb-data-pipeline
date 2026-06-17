@@ -1,0 +1,181 @@
+clean_names,name,sflag,AphiaID,HAB,warning_level,italic
+Actinocyclus_spp,Actinocyclus,spp.,148944,FALSE,,TRUE
+Air_bubbles,,,NA,FALSE,,FALSE
+Akashiwo_sanguinea,Akashiwo sanguinea,,232546,TRUE,,TRUE
+Akinete,Cyanophyceae,,146542,FALSE,,FALSE
+Alexandrium_pseudogonyaulax,Alexandrium pseudogonyaulax,,109713,TRUE,,TRUE
+Amphidinium-Katodinium,Dinophyceae,,19542,FALSE,,FALSE
+Amphidinium-Katodinium2,Dinophyceae,,19542,FALSE,,FALSE
+Amphidinium-like,Amphidiniaceae,,1308689,FALSE,,FALSE
+Amphidinium_crassum,Amphidinium crassum,,109726,FALSE,,TRUE
+Amylax_triacantha,Amylax triacantha,,110007,FALSE,,TRUE
+Apedinella_radians,Apedinella radians,,248097,FALSE,,TRUE
+Aphanizomenon_flosaquae_bundle,Aphanizomenon flos-aquae,,248099,TRUE,,TRUE
+Aphanizomenon_flosaquae_filament,Aphanizomenon flos-aquae,,248099,TRUE,,TRUE
+Apocalathium_malmogiense,Apocalathium malmogiense,,1380043,FALSE,,TRUE
+Asterionellopsis_glacialis,Asterionellopsis glacialis,,149139,FALSE,,TRUE
+Asterionellopsis_glacialis_single,Asterionellopsis glacialis,,149139,FALSE,,TRUE
+Attheya_spp,Attheya,spp.,160519,FALSE,,TRUE
+Beads,,,NA,FALSE,,FALSE
+Binuclearia_lauterbornii,Binuclearia lauterbornii,,575737,FALSE,,TRUE
+Calciopappus_sp,Calciopappus,sp.,235858,FALSE,,TRUE
+Centrales_single,Centrales,,341285,FALSE,,FALSE
+Cerataulina_pelagica,Cerataulina pelagica,,149619,FALSE,,TRUE
+Chaetoceros_cf_convolutus,Chaetoceros,spp.,148985,FALSE,,TRUE
+Chaetoceros_contortus,Chaetoceros contortus,,149623,FALSE,,TRUE
+Chaetoceros_curvisetus_Chaetoceros_debilis,Chaetoceros,spp.,148985,FALSE,,TRUE
+Chaetoceros_danicus,Chaetoceros danicus,,149120,FALSE,,TRUE
+Chaetoceros_decipiens,Chaetoceros decipiens,,149126,FALSE,,TRUE
+Chaetoceros_diadema,Chaetoceros diadema,,149128,FALSE,,TRUE
+Chaetoceros_spp_chain,Chaetoceros,spp.,148985,FALSE,,TRUE
+Chaetoceros_spp_single,Chaetoceros,spp.,148985,FALSE,,TRUE
+Chaetoceros_tenuissimus-like,Chaetoceros,spp.,148985,FALSE,,TRUE
+Chlorococcales,Chlorococcales,,17111,FALSE,,FALSE
+Chroococcales,Chroococcales,,146543,FALSE,,FALSE
+Chroococcus_spp,Chroococcus,spp.,146565,FALSE,,TRUE
+Chrysochromulina_lanceolata,Chrysochromulina lanceolata,,388470,FALSE,,TRUE
+Chrysochromulina_parkeae,Chrysochromulina parkeae,,115126,FALSE,,TRUE
+Ciliophora,Ciliophora,,11,FALSE,,FALSE
+Cocconeis-like,Cocconeidaceae,,148988,FALSE,,FALSE
+Cochlodinium-like,Gymnodiniaceae,,109410,FALSE,,FALSE
+Corethron,Corethron,spp.,149109,FALSE,,TRUE
+Coscinodiscus_spp,Coscinodiscus,spp.,148917,FALSE,,TRUE
+Cryptomonadales,Cryptomonadales,,17640,FALSE,,FALSE
+Cryptophyta,Cryptophyta,,17638,FALSE,,FALSE
+Cyclotella_spp,Cyclotella,spp.,148905,FALSE,,TRUE
+Cylindrotheca_closterium_Nitzschia_longissima,Bacillariaceae,,149002,FALSE,,FALSE
+Cymbomonas_tetramitiformis,Cymbomonas tetramitiformis,,134545,FALSE,,TRUE
+Dactyliosolen_fragilissimus,Dactyliosolen fragilissimus,,149310,FALSE,,TRUE
+Debris,,,NA,FALSE,,FALSE
+Diatoma_tenuis-like_chain,Diatoma,sp.,149013,FALSE,,TRUE
+Diatoma_tenuis-like_single_cell,Diatoma,sp.,149013,FALSE,,TRUE
+Dictyocha_fibula,Dictyocha fibula,,157463,FALSE,,TRUE
+Dictyochales,Dictyochales,,157256,FALSE,,FALSE
+Dictyochales_transformation,Dictyochales,,157256,FALSE,,FALSE
+Dinobryon_spp,Dinobryon,spp.,157240,FALSE,,TRUE
+Dinophyceae,Dinophyceae,,19542,FALSE,,FALSE
+Dinophyceae_larger_than_30,Dinophyceae,,19542,FALSE,,FALSE
+Dinophyceae_pair,Dinophyceae,,19542,FALSE,,FALSE
+Dinophyceae_smaller_than_30,Dinophyceae,,19542,FALSE,,FALSE
+Dinophysis_acuminata,Dinophysis acuminata,,109603,TRUE,1500,TRUE
+Dinophysis_acuta,Dinophysis acuta,,109604,TRUE,200,TRUE
+Dinophysis_norvegica,Dinophysis norvegica,,109637,TRUE,4000,TRUE
+Dinophysis_spp,Dinophysis,spp.,109462,FALSE,,TRUE
+Dinophysis_tripos,Dinophysis tripos,,109662,TRUE,,TRUE
+Ditylum_brightwellii,Ditylum brightwellii,,149023,FALSE,,TRUE
+Dolichospermum_spp_coil,Dolichospermum,spp.,603709,FALSE,,TRUE
+Dolichospermum_spp_filament,Dolichospermum,spp.,603709,FALSE,,TRUE
+Ebria_tripartita,Ebria tripartita,,118051,FALSE,,TRUE
+Echinoderm_larvae,Echinodermata,,1806,FALSE,,FALSE
+Ensiculifera_carinata,Ensiculifera carinata,,233835,FALSE,,TRUE
+Eucampia,Eucampia,spp.,149130,FALSE,,TRUE
+Euglenophyceae,Euglenophyceae,,19539,FALSE,,FALSE
+Eutreptiella_braarudii,Eutreptiella braarudii,,248121,FALSE,,TRUE
+Eutreptiella_sp,Eutreptiella,sp.,17657,FALSE,,TRUE
+Fragilaria,Fragilaria,spp.,149028,FALSE,,TRUE
+Gephyrocapsa_huxleyi,Gephyrocapsa huxleyi,,236056,FALSE,,TRUE
+Guinardia_delicatula,Guinardia delicatula,,149112,FALSE,,TRUE
+Guinardia_flaccida,Guinardia flaccida,,149132,FALSE,,TRUE
+Guinardia_striata,Guinardia striata,,149113,FALSE,,TRUE
+Gymnodiniales,Gymnodiniales,,109392,FALSE,,FALSE
+Gymnodiniales_CC,Gymnodiniales,,109392,FALSE,,FALSE
+Gymnodiniales_CS,Gymnodiniales,,109392,FALSE,,FALSE
+Gymnodiniales_Eliptical,Gymnodiniales,,109392,FALSE,,FALSE
+Gymnodiniales_smaller_than_30,Gymnodiniales,,109392,FALSE,,FALSE
+Gymnodinium_corollarium,Gymnodinium corollarium,,623645,FALSE,,TRUE
+Gyrodinium_heterotropic,Gyrodinium,spp.,109476,FALSE,,TRUE
+Gyrosigma_Pleurosigma,Pleurosigmataceae,,149032,FALSE,,FALSE
+Heterocapsa_niei-like,Heterocapsa,sp.,109540,FALSE,,TRUE
+Heterocapsa_rotundata,Heterocapsa rotundata,,110152,FALSE,,TRUE
+Heterocyte,Cyanophyceae,,146542,FALSE,,FALSE
+Heterosigma-like,Chattonellaceae,,160583,FALSE,,FALSE
+Kapelodinium_vestifici,Kapelodinium vestifici,,1368615,FALSE,,TRUE
+Karenia_mikimotoi-like,Karenia,spp.,231788,FALSE,,TRUE
+Karenia_spp,Karenia,spp.,231788,FALSE,,TRUE
+Katablepharis_remigera,Katablepharis remigera,,627117,FALSE,,TRUE
+Katodinium-like,Tovelliaceae,,577245,FALSE,,FALSE
+Kryptoperidinium_triquetrum,Kryptoperidinium triquetrum,,1346683,FALSE,,TRUE
+Laboea_strobila,Laboea strobila,,101264,FALSE,,TRUE
+Lauderia_spp,Lauderia,spp.,149134,FALSE,,TRUE
+Lepidodinium-like,Gymnodiniaceae,,109410,FALSE,,FALSE
+Leptocylindrus_danicus,Leptocylindrus danicus,,149106,FALSE,,TRUE
+Leptocylindrus_danicus_Leptocylindrus_minimus,Leptocylindrus,spp.,149038,FALSE,,TRUE
+Licmophora_spp,Licmophora,spp.,149342,FALSE,,TRUE
+Lingulaulax_polyedra,Lingulaulax polyedra,,1778370,TRUE,,TRUE
+Melosira_arctica,Melosira arctica,,160537,FALSE,,TRUE
+Meringosphaera_mediterranea,Meringosphaera mediterranea,,248129,FALSE,,TRUE
+Merismopedia_spp,Merismopedia,spp.,146545,FALSE,,TRUE
+Mesodinium_major,Mesodinium major,,1476503,FALSE,,TRUE
+Mesodinium_rubrum,Mesodinium rubrum,,232069,FALSE,,TRUE
+Mesodinium_spp,Mesodinium,spp.,179320,FALSE,,TRUE
+Mesodinium_spp2,Mesodinium,spp.,179320,FALSE,,TRUE
+Mesodinium_spp3,Mesodinium,spp.,179320,FALSE,,TRUE
+Monoraphidium_spp,Monoraphidium,spp.,160590,FALSE,,TRUE
+Mussel_larvae,Bivalvia,,105,FALSE,,TRUE
+Navicula-like,Naviculaceae,,149031,FALSE,,FALSE
+Nitzschia_frigida,Nitzschia frigida,,175400,FALSE,,TRUE
+Nitzschia_paleacea,Nitzschia paleacea,,609727,FALSE,,TRUE
+Nodularia_spumigena_coil,Nodularia spumigena,,160566,TRUE,,TRUE
+Nodularia_spumigena_filament,Nodularia spumigena,,160566,TRUE,,TRUE
+Octactis_speculum,Octactis speculum,,1310442,FALSE,,TRUE
+Oocystis_spp,Oocystis,spp.,178611,FALSE,,TRUE
+Oscillatoriales,Oscillatoriales,,146603,FALSE,,FALSE
+Oxytoxum_gracile,Oxytoxum gracile,,233870,FALSE,,TRUE
+Paralia_sulcata,Paralia sulcata,,149055,FALSE,,TRUE
+Pauliella_taeniata,Pauliella taeniata,,163624,FALSE,,TRUE
+Pauliella_taeniata2,Pauliella taeniata,,163624,FALSE,,TRUE
+Pauliella_taeniata3,Pauliella taeniata,,163624,FALSE,,TRUE
+Pauliella_taeniata4,Pauliella taeniata,,163624,FALSE,,TRUE
+Pauliella_taeniata5,Pauliella taeniata,,163624,FALSE,,TRUE
+Pauliella_taeniata6,Pauliella taeniata,,163624,FALSE,,TRUE
+Pennales_single,Pennales,,1304629,FALSE,,FALSE
+Peridiniales,Peridiniales,,109394,FALSE,,FALSE
+Peridiniella_catenata_chain,Peridiniella catenata,,110156,FALSE,,TRUE
+Peridiniella_catenata_single,Peridiniella catenata,,110156,FALSE,,TRUE
+Proboscia_alata,Proboscia alata,,149168,FALSE,,TRUE
+Prorocentrum_cordatum,Prorocentrum cordatum,,232376,TRUE,,TRUE
+Prorocentrum_micans,Prorocentrum micans,,110303,FALSE,,TRUE
+Prorocentrum_micans_Prorocentrum_triestinum_Prorocentrum_gracile,Prorocentrum,spp.,109566,FALSE,,TRUE
+Prorocentrum_triestinum,Prorocentrum triestinum,,110316,FALSE,,TRUE
+Protoperidinium_bipes,Protoperidinium bipes,,110208,FALSE,,TRUE
+Pseudo-nitzschia_spp,Pseudo-nitzschia,spp.,149151,TRUE,100000,TRUE
+Pseudochattonella-like,Pseudochattonella,spp.,531445,TRUE,,TRUE
+Pseudochattonella-like,Pseudochattonella,spp.,368900,TRUE,,TRUE
+Pseudopedinella-like,Actinomonadaceae,,1652121,FALSE,,FALSE
+Pseudosolenia_calcar-avis,Pseudosolenia calcar-avis,,163344,FALSE,,TRUE
+Pyramimonas_spp_large,Pyramimonas,spp.,134529,FALSE,,TRUE
+Pyramimonas_spp_small,Pyramimonas,spp.,134529,FALSE,,TRUE
+Rhizosolenia_imbricata,Rhizosolenia imbricata,,149116,FALSE,,TRUE
+Rhizosolenia_spp,Rhizosolenia,spp.,149069,FALSE,,TRUE
+Scenedesmus_spp,Scenedesmus,spp.,160602,FALSE,,TRUE
+Scrippsiella_acuminata-like,Scrippsiella,sp.,109545,FALSE,,TRUE
+Scrippsiella_group,Scrippsiella,group,NA,FALSE,,TRUE
+Skeletonema_spp,Skeletonema,spp.,149073,FALSE,,TRUE
+Snowella-Woronichinia2,Cyanophyceae,,146542,FALSE,,FALSE
+Snowella_Woronichinia,Cyanophyceae,,146542,FALSE,,FALSE
+Stephanopyxis-like,Stephanopyxidaceae,,149254,FALSE,,FALSE
+Striatella_spp,Striatella,spp.,149176,FALSE,,TRUE
+Strombidium-like,Strombidiidae,,1703,FALSE,,FALSE
+Sundstroemia_setigera,Sundstroemia setigera,,1590706,FALSE,,TRUE
+Thalassionema_nitzschioides,Thalassionema nitzschioides,,149093,FALSE,,TRUE
+Thalassiosira_angulata,Thalassiosira angulata,,148913,FALSE,,TRUE
+Thalassiosira_anguste-lineata,Thalassiosira anguste-lineata,,148914,FALSE,,TRUE
+Thalassiosira_gravida-like,Thalassiosira,,148912,FALSE,,TRUE
+Thalassiosira_levanderi,Thalassiosira levanderi,,149308,FALSE,,TRUE
+Thalassiosira_nordenskioeldii,Thalassiosira nordenskioeldii,,148931,FALSE,,TRUE
+Thalassiosira_spp_chain,Thalassiosira,spp.,148912,FALSE,,TRUE
+Thalassiosira_spp_single,Thalassiosira,spp.,148912,FALSE,,TRUE
+Tintinnids,Tintinnida,,425497,FALSE,,FALSE
+Torodinium_robustum,Torodinium robustum,,109889,FALSE,,TRUE
+Trieres_mobiliensis,Trieres mobiliensis,,839991,FALSE,,TRUE
+Tripos_furca,Tripos furca,,840627,FALSE,,TRUE
+Tripos_fusus,Tripos fusus,,840626,FALSE,,TRUE
+Tripos_lineatus,Tripos lineatus,,837459,FALSE,,TRUE
+Tripos_longipes,Tripos longipes,,841259,FALSE,,TRUE
+Tripos_muelleri,Tripos muelleri,,495363,FALSE,,TRUE
+Unicells,Unicells,,1,FALSE,,FALSE
+Uroglenopsis_sp,Uroglenopsis,sp.,555950,FALSE,,TRUE
+Warnowia-like,Warnowiaceae,,109415,FALSE,,FALSE
+Zooplankton,Crustacea,,1066,FALSE,,FALSE
+mixed,Aggregate,,NA,FALSE,,FALSE
+unclassified,Unclassified,,NA,FALSE,,FALSE
