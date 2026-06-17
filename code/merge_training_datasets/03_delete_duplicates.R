@@ -15,9 +15,9 @@ library(purrr)
 csv_path <- "Z:/data/training_libraries/V6/duplicate_files.csv"   # path to your duplicate_files.csv
 
 reference_root <- "Z:/data/png_images/ClassiPyR_2026-03-12"
-target_root    <- "Z:/data/training_libraries/V6/SMHI-NIVA-SYKE-SAMS-SZN2"
+target_root    <- "Z:/data/training_libraries/V6/SMHI-NIVA-SYKE-SAMS-SZN"
 
-dry_run <- TRUE   # Set to FALSE to actually delete files
+dry_run <- FALSE   # Set to FALSE to actually delete files
 
 # ── Load and reshape duplicates ────────────────────────────────────────────────
 
