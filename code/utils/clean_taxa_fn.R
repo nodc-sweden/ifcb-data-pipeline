@@ -22,7 +22,7 @@ clean_taxa <- function(class_names) {
     Echinoderm_larvae = list(reported_name = "Echinodermata", aphia_id = 1806L),
     Mussel_larvae = list(reported_name = "Bivalvia", aphia_id = 105L),
     Zooplankton = list(reported_name = "Crustacea", aphia_id = 1066L),
-    Actinocyclus_spp = list(reported_name = "Actinocyclus_spp", aphia_id = 148944L),
+    Actinocyclus_spp = list(reported_name = "Actinocyclus", aphia_id = 148944L),
     Unicells = list(reported_name = "Biota", aphia_id = 1L)
   )
 
