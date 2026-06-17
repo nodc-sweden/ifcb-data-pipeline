@@ -1,5 +1,6 @@
 # Virtuale environments
 .virtualenvs
+/venv
 
 # History files
 .Rhistory
@@ -61,4 +62,16 @@ data/shark/*.txt
 # Output
 output/html_reports/*.html
 output/*.txt
+output/*.tsv
+output/*.csv
 plots/*.png
+
+# Bat files
+*.bat
+
+# Output
+/assets
+
+# Logs
+large_bins_log.txt
+pipeline_run_log.txt

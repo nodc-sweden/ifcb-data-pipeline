@@ -2,8 +2,8 @@
 author: "Anders Torstensson"
 date: "`r Sys.Date()`"
 params: 
-  classifier: "niva_smhi" # "Baltic", "Skagerrak-Kattegat", "Tangesund" or "Skagerrak-Kattegat-Tangesund"
-  year: [2025] # each year separated by comma, e.g. [2022, 2023, 2024]
+  classifier: "Baltic" # "Baltic", "Skagerrak-Kattegat", "Tangesund" or "Skagerrak-Kattegat-Tangesund"
+  year: [2022] # each year separated by comma, e.g. [2022, 2023, 2024]
   threshold: "opt" # MATLAB classifier threshold, "opt", "adhoc" or "none"
   remove_flagged_data: !r c("bubbles", "incomplete", "near land") # What flags should be used for filtering data e.g. c("bubbles", "incomplete", "near land")
   regional: FALSE # If output should only contain data from the classifier region, e.g. Baltic data for the Baltic classifier
@@ -258,20 +258,29 @@ for (i in seq_along(params$year)) {
       ) %>%
       select(-gpsTimeFromFix)
   }
-
+  
   missing_position <- hdr_data %>% filter(is.na(gpsLatitude) | is.na(gpsLongitude))
   if (nrow(missing_position) > 0) {
-    ferrybox_positions <- ifcb_get_ferrybox_data(missing_position$timestamp, 
-                                                 ferrybox_path, 
-                                                 ship = "SveaAWS",
-                                                 timestamp_param = "38067",
-                                                 max_time_diff_min = 5) %>%
-      rename(gpsLatitude_fb = gpsLatitude, gpsLongitude_fb = gpsLongitude)
-    hdr_data <- hdr_data %>%
-      left_join(ferrybox_positions, by = "timestamp") %>%
-      mutate(gpsLatitude = coalesce(gpsLatitude, gpsLatitude_fb),
-             gpsLongitude = coalesce(gpsLongitude, gpsLongitude_fb)) %>%
-      select(-gpsLatitude_fb, -gpsLongitude_fb)
+    ferrybox_positions <- tryCatch(
+      ifcb_get_ferrybox_data(missing_position$timestamp, 
+                             ferrybox_path, 
+                             ship = "SveaAWS",
+                             timestamp_param = "38067",
+                             max_time_diff_min = 5) %>%
+        rename(gpsLatitude_fb = gpsLatitude, gpsLongitude_fb = gpsLongitude),
+      error = function(e) {
+        message(paste("No ferrybox match found for year", year, ":", e$message))
+        NULL
+      }
+    )
+    
+    if (!is.null(ferrybox_positions)) {
+      hdr_data <- hdr_data %>%
+        left_join(ferrybox_positions, by = "timestamp") %>%
+        mutate(gpsLatitude = coalesce(gpsLatitude, gpsLatitude_fb),
+               gpsLongitude = coalesce(gpsLongitude, gpsLongitude_fb)) %>%
+        select(-gpsLatitude_fb, -gpsLongitude_fb)
+    }
   }
 
   ferrybox_parameters <- c("70", "80070", "8063", "88063", "8165", "88165", "8173", 
@@ -1351,7 +1360,7 @@ for (i in seq_along(params$year)) {
   shark_col <- ifcb_get_shark_colnames()
 
   # Create a data frame with empty rows matching the length of data
-  shark_col[1:nrow(data_aggregated_year),] <- ""
+  shark_col <- shark_col[rep(NA_integer_, nrow(data_aggregated_year)), ]
 
   if (params$classifier == "Tangesund") {
     station_name <- "Tangesund"

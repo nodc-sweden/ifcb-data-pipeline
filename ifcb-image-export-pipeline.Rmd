@@ -2,7 +2,7 @@
 author: "Anders Torstensson"
 date: "`r Sys.Date()`"
 params: 
-  classifier: ["Baltic", "Skagerrak-Kattegat", "Tangesund", "iRfcb"] # "Baltic", "Skagerrak-Kattegat", "Tangesund", "iRfcb"
+  classifier: ["niva_smhi_baltic"] # "Baltic", "Skagerrak-Kattegat", "Tangesund", "iRfcb"
   version: "next"
  
 output: html_document
@@ -126,6 +126,7 @@ for (classifier in seq_along(params$classifier[!grepl("iRfcb", params$classifier
                                 data_folder,
                                 iconv(png_folders[classifier], from = "UTF-8", to = "latin1"),
                                 skip_class = "unclassified",
+                                add_trailing_numbers = FALSE,
                                 verbose = FALSE,
                                 overwrite = TRUE)
   

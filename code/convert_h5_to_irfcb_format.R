@@ -16,7 +16,7 @@
 library(hdf5r)
 
 # Set the folder containing GPU-format H5 files
-folder <- "/path/to/classified"
+folder <- "Z:/data/classified/SMHI-NIVA-ResNet50-V5"
 
 if (!dir.exists(folder)) {
   stop("Folder not found: ", folder)
