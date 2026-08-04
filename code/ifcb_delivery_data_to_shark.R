@@ -147,10 +147,10 @@ if (file.exists(file.path(processed_data, "data.txt"))) {
   
   # Identify the last 50 samples that have been classified
   valid_class_bins <- class_bins[!grepl(blacklist_pattern, class_bins)]
-  last_50_samples <- sort(valid_class_bins, decreasing = TRUE)[1:50]
+  last_30_samples <- sort(valid_class_bins, decreasing = TRUE)[1:30]
   
-  # Check if any of the last 50 bins are already delivered
-  all_delivered <- any(last_50_samples %in% delivered_data$SMPNO)
+  # Check if any of the last 30 bins are already delivered
+  all_delivered <- any(last_30_samples %in% delivered_data$SMPNO)
   
   # Stop if all data are already delivered
   if (all_delivered) {

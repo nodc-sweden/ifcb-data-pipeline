@@ -19,6 +19,7 @@ clean_taxa <- function(class_names) {
   manual_overrides <- list(
     Akinete = list(reported_name = "Cyanophyceae", aphia_id = 146542L),
     Heterocyte = list(reported_name = "Cyanophyceae", aphia_id = 146542L),
+    Scrippsiella_group = list(reported_name = "Scrippsiella", aphia_id = 109545L),
     Echinoderm_larvae = list(reported_name = "Echinodermata", aphia_id = 1806L),
     Mussel_larvae = list(reported_name = "Bivalvia", aphia_id = 105L),
     Zooplankton = list(reported_name = "Crustacea", aphia_id = 1066L),

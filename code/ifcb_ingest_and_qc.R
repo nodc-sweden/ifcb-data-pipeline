@@ -441,7 +441,7 @@ if (length(bins_to_process) > 0) {
   ifcb_extract_features(data_folder = as.character(raw_folder),
                         features_folder = as.character(feature_folder),
                         blobs_folder = as.character(blobs_folder),
-                        bins = as.list(bins_to_process),
+                        bins = bins_to_process,
                         parallel = TRUE,
                         n_cores = 3,
                         feature_tag = "fea")
