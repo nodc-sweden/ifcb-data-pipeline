@@ -7,6 +7,7 @@ Sys.setenv(USE_IRFCB_PYTHON = FALSE)
 
 suppressPackageStartupMessages({
   library(iRfcb, quietly = TRUE)
+  library(reticulate, quietly = TRUE)
 })
 
 # -------------------------------
@@ -18,6 +19,8 @@ ifcb_path <- Sys.getenv("ifcb_path")
 repo_dir <- "C:/R/ifcb-data-pipeline"
 
 feature_folder <- file.path(ifcb_path, "features_1_1_1", "v4", year)
+blobs_folder <- file.path(ifcb_path, "blobs", "v4", year)
+raw_folder <- file.path(ifcb_path, "data", year)
 
 # Use venv
 use_virtualenv(file.path(repo_dir, ".virtualenvs", "features"))
