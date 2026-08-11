@@ -33,9 +33,9 @@ source("code/utils/clean_taxa_fn.R")
 # -------------------------------
 
 internal_use <- FALSE
-cnn_model <- "SMHI-NIVA-SYKE-SAMS-SZN-ResNet50-V6" # niva_smhi_baltic or NA for MATLAB
-threshold_file <- "V6/V6-resnet50_dataset_squarepad_augmented_b64_lr0.0001_e20_thresholds_and_metrics.json"
-classlist_file <- "V6-resnet50_dataset_squarepad_augmented_b64_lr0.0001_e20_classes.txt"
+cnn_model <- "SMHI-NIVA-SYKE-SAMS-SZN-ResNet50-V6_1" # niva_smhi_baltic or NA for MATLAB
+threshold_file <- "V6_1/V6_1-resnet50_dataset_squarepad_augmented_b64_lr0.0001_e30_thresholds_and_metrics.json"
+classlist_file <- "V6_1-resnet50_dataset_squarepad_augmented_b64_lr0.0001_e30_classes.txt"
 instrument_number <- "IFCB134"
 
 year <- as.numeric(format(Sys.Date(), "%Y"))
@@ -86,7 +86,7 @@ classlist_file <- file.path(ifcb_path, "pytorch", "models", classlist_file)
 
 sqlite_path <- file.path(tools::R_user_dir("ClassiPyR", "data"), "annotations.sqlite")
 
-class_folder <- file.path(ifcb_path, "classified", cnn_model)
+class_folder <- file.path(ifcb_path, "classified", "cellcount_new")
 
 # Define the URL of a EEA shapefile and the target directory
 url <- "https://www.eea.europa.eu/data-and-maps/data/eea-coastline-for-analysis-2/gis-data/eea-coastline-polygon/at_download/file"
@@ -147,10 +147,10 @@ if (file.exists(file.path(processed_data, "data.txt"))) {
   
   # Identify the last 50 samples that have been classified
   valid_class_bins <- class_bins[!grepl(blacklist_pattern, class_bins)]
-  last_30_samples <- sort(valid_class_bins, decreasing = TRUE)[1:30]
+  last_50_samples <- sort(valid_class_bins, decreasing = TRUE)[1:50]
   
-  # Check if any of the last 30 bins are already delivered
-  all_delivered <- any(last_30_samples %in% delivered_data$SMPNO)
+  # Check if any of the last 50 bins are already delivered
+  all_delivered <- any(last_50_samples %in% delivered_data$SMPNO)
   
   # Stop if all data are already delivered
   if (all_delivered) {
@@ -230,7 +230,11 @@ biovolumes <- ifcb_summarize_biovolumes(feature_folder = feature_folder,
                                         use_python = FALSE,
                                         feature_version = 4,
                                         verbose = TRUE,
-                                        drop_zero_volume = TRUE)
+                                        drop_zero_volume = TRUE,
+                                        use_cell_counts = TRUE,          # report cell counts
+                                        diatom_equation = "auto",
+                                        carbon_conversion = "cell",
+                                        single_cell_values = c(-1, 0))   # default: uncounted/zero ROI = 1 cell
 
 # Read manual annotations from SQlite database
 con <- dbConnect(RSQLite::SQLite(), sqlite_path)
@@ -250,8 +254,17 @@ if (nrow(annotations) > 0) {
     hdr_folder = raw_folder,
     use_python = FALSE,
     verbose = TRUE,
-    drop_zero_volume = FALSE
+    drop_zero_volume = FALSE,
+    use_cell_counts = FALSE,
+    diatom_equation = "auto",
+    carbon_conversion = "roi",
+    single_cell_values = c(-1, 0)
   )
+  
+  # Manual annotations are single-image verifications (no chain counting);
+  # treat each ROI as one cell so columns align with the autoclass data.
+  manual_biovolumes$cell_counts <- manual_biovolumes$counts
+  manual_biovolumes$cell_counts_per_liter <- manual_biovolumes$counts_per_liter
 }
 
 # Find samples
@@ -323,17 +336,23 @@ autoclass_joined <- biovolumes %>%
          # classifier_used = paste0("SMHI-", params$classifier, " v.", max_versions[[i]]),
          metoa = "IMA-SW",
          associated_media = NA,
-         class_prog = "https://github.com/nodc-sweden/ifcb-pytorch-classify/releases/tag/v0.1.0")
+         class_prog = "https://github.com/nodc-sweden/ifcb-pytorch-classify/releases/tag/v0.2.0")
 
 autoclass_aggregated <- autoclass_joined %>%
-  group_by(sample, scientificname) %>%
+  # Group by species where known, else by classifier class, so classes lacking a
+  # WoRMS scientificname (Debris, Beads, Air_bubbles, Scrippsiella_group, mixed,
+  # unclassified) each keep their own row instead of collapsing into one NA bin.
+  mutate(agg_key = coalesce(scientificname, class)) %>%
+  group_by(sample, agg_key) %>%
   summarise(
     # Sum the numeric measurements
     counts = sum(counts, na.rm = TRUE),
+    cell_counts = sum(cell_counts, na.rm = TRUE),
     biovolume_mm3 = sum(biovolume_mm3, na.rm = TRUE),
     carbon_ug = sum(carbon_ug, na.rm = TRUE),
     ml_analyzed = first(ml_analyzed),  # Should be identical per sample
     counts_per_liter = sum(counts_per_liter, na.rm = TRUE),
+    cell_counts_per_liter = sum(cell_counts_per_liter, na.rm = TRUE),
     biovolume_mm3_per_liter = sum(biovolume_mm3_per_liter, na.rm = TRUE),
     carbon_ug_per_liter = sum(carbon_ug_per_liter, na.rm = TRUE),
     
@@ -348,13 +367,14 @@ autoclass_aggregated <- autoclass_joined %>%
     
     # Keep first value of all other columns (assumed identical)
     across(
-      -c(counts, biovolume_mm3, carbon_ug, ml_analyzed, 
-         counts_per_liter, biovolume_mm3_per_liter, carbon_ug_per_liter,
+      -c(counts, cell_counts, biovolume_mm3, carbon_ug, ml_analyzed,
+         counts_per_liter, cell_counts_per_liter, biovolume_mm3_per_liter, carbon_ug_per_liter,
          class, precision, threshold, f1, recall, support),
       first
     ),
     .groups = "drop"
-  )
+  ) %>%
+  select(-agg_key)  # drop temporary grouping key
 
 manual_joined <- manual_biovolumes %>%
   left_join(ifcb_convert_filenames(metadata_selected$pid), by ="sample") %>%
@@ -373,14 +393,18 @@ manual_joined <- manual_biovolumes %>%
 
 # Aggregate based on scientific name
 manual_aggregated <- manual_joined %>%
-  group_by(sample, scientificname) %>%
+  # Group by species where known, else by classifier class (see autoclass note).
+  mutate(agg_key = coalesce(scientificname, class)) %>%
+  group_by(sample, agg_key) %>%
   summarise(
     # Sum the numeric measurements
     counts = sum(counts, na.rm = TRUE),
+    cell_counts = sum(cell_counts, na.rm = TRUE),
     biovolume_mm3 = sum(biovolume_mm3, na.rm = TRUE),
     carbon_ug = sum(carbon_ug, na.rm = TRUE),
     ml_analyzed = first(ml_analyzed),  # Should be identical per sample
     counts_per_liter = sum(counts_per_liter, na.rm = TRUE),
+    cell_counts_per_liter = sum(cell_counts_per_liter, na.rm = TRUE),
     biovolume_mm3_per_liter = sum(biovolume_mm3_per_liter, na.rm = TRUE),
     carbon_ug_per_liter = sum(carbon_ug_per_liter, na.rm = TRUE),
     
@@ -389,13 +413,14 @@ manual_aggregated <- manual_joined %>%
     
     # Keep first value of all other columns (assumed identical)
     across(
-      -c(counts, biovolume_mm3, carbon_ug, ml_analyzed, 
-         counts_per_liter, biovolume_mm3_per_liter, carbon_ug_per_liter,
+      -c(counts, cell_counts, biovolume_mm3, carbon_ug, ml_analyzed,
+         counts_per_liter, cell_counts_per_liter, biovolume_mm3_per_liter, carbon_ug_per_liter,
          class),
       first
     ),
     .groups = "drop"
-  )
+  ) %>%
+  select(-agg_key)  # drop temporary grouping key
 
 # Combine human verified data (manual annotations) with automatic classification
 if (nrow(manual_aggregated) > 0) {
@@ -458,13 +483,13 @@ unclassified <- data_aggregated %>%
   filter(class_clean == "unclassified") %>%
   select(
     -worms_class, -class_clean, -scientificname, -species_flag_taxon_name, 
-    -aphia_id, -sflag, -trophic_type, -biovolume_mm3, 
-    -carbon_ug, -carbon_ug_per_liter,
-    -any_of(c("precision", "detection_probability", "miss_probability", 
+    -aphia_id, -sflag, -trophic_type, -biovolume_mm3,
+    -carbon_ug, -carbon_ug_per_liter, -counts, -counts_per_liter,
+    -any_of(c("precision", "detection_probability", "miss_probability",
               "f1", "class_id", "threshold", "recall", "support"))
   ) %>%
-  rename(unclassified_counts = counts,
-         unclassified_abundance = counts_per_liter,
+  rename(unclassified_counts = cell_counts,
+         unclassified_abundance = cell_counts_per_liter,
          unclassified_volume = biovolume_mm3_per_liter,
          ph = `70`,
          chl = `8063`,
@@ -616,9 +641,10 @@ shark_df <- shark_col %>%
          VERIFIED_BY = data_aggregated$verified_by,
          CLASS_NAME = data_aggregated$class,
          CLASS_F1 = data_aggregated$f1, # In percent
-         COUNT = data_aggregated$counts, # COUNTS per SAMPLE
+         COUNT = round(data_aggregated$cell_counts), # CELL COUNTS per SAMPLE
+         IMAGE_COUNT = data_aggregated$counts, # NUMBER OF ROIs (images); mean chain length = COUNT / IMAGE_COUNT
          COEFF = round(1000/data_aggregated$ml_analyzed, 1),
-         ABUND = round(data_aggregated$counts_per_liter, 1), #COUNTS PER LITER
+         ABUND = round(data_aggregated$cell_counts_per_liter, 1), # CELLS PER LITER
          QFLAG = data_aggregated$flag,
          C_CONC = signif(data_aggregated$carbon_ug_per_liter, 6), # CARBON PER LITER
          BIOVOL = signif(data_aggregated$biovolume_mm3_per_liter, 6), # BIOVOLUME PER LITER
