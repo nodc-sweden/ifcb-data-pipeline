@@ -443,6 +443,7 @@ if (length(bins_to_process) > 0) {
                         blobs_folder = as.character(blobs_folder),
                         bins = bins_to_process,
                         parallel = TRUE,
+                        multiblob = TRUE,
                         n_cores = 3,
                         feature_tag = "fea")
 }
