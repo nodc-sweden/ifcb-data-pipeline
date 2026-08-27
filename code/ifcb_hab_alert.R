@@ -15,7 +15,7 @@ source("code/utils/clean_taxa_fn.R")
 # Configuration
 # -------------------------------
 
-cnn_model <- "SMHI-NIVA-SYKE-SAMS-SZN-ResNet50-V6" # niva_smhi_baltic or NA for MATLAB
+cnn_model <- "SMHI-NIVA-SYKE-SAMS-SZN-ResNet50-V6_1" # niva_smhi_baltic or NA for MATLAB
 
 year <- as.numeric(format(Sys.Date(), "%Y"))
 date <- format(Sys.Date()-1, "%Y%m%d") # Yesterday
@@ -58,6 +58,7 @@ if (length(class_bins) > 0) {
                                           diatom_class = "Bacillariophyceae",
                                           diatom_include = diatom_include,
                                           use_python = FALSE,
+                                          use_cell_counts = TRUE,
                                           feature_version = 4,
                                           verbose = TRUE,
                                           drop_zero_volume = TRUE)
@@ -105,17 +106,17 @@ hab_data <- biovolumes %>%
 
 max_counts <- hab_data %>%
   group_by(aphia_id) %>%
-  slice_max(counts_per_liter, n = 1, with_ties = FALSE) %>%
+  slice_max(cell_counts_per_liter, n = 1, with_ties = FALSE) %>%
   ungroup() %>%
   select(
     aphia_id,
     class_clean,
     sample,
-    counts,
-    counts_per_liter,
+    cell_counts,
+    cell_counts_per_liter,
     warning_level
   ) %>%
-  mutate(counts_per_liter = round(counts_per_liter)) %>%
+  mutate(cell_counts_per_liter = round(cell_counts_per_liter)) %>%
   arrange(class_clean)
 
 biomass_data <- biovolumes %>%
@@ -139,17 +140,17 @@ cyano_counts <- biovolumes %>%
   left_join(class_names, by = "class") %>%
   filter(worms_phylum == "Cyanobacteria") %>%
   group_by(aphia_id) %>%
-  slice_max(counts_per_liter, n = 1, with_ties = FALSE) %>%
+  slice_max(cell_counts_per_liter, n = 1, with_ties = FALSE) %>%
   ungroup() %>%
   select(
     aphia_id,
     class_clean,
     sample,
-    counts,
-    counts_per_liter,
+    cell_counts,
+    cell_counts_per_liter,
     warning_level
   ) %>%
-  mutate(counts_per_liter = round(counts_per_liter)) %>%
+  mutate(cell_counts_per_liter = round(cell_counts_per_liter)) %>%
   arrange(class_clean)
 
 # -------------------------------
@@ -185,17 +186,17 @@ if (bloom_detected) {
 # -------------------------------
 
 # Dynamic emails
-# names <- c("Anders Torstensson", "Bengt Karlson")
-# emails <- c(at_email, bk_email)
-names <- c("Anders Torstensson")
-emails <- c(at_email)
+names <- c("Anders Torstensson", "Bengt Karlson")
+emails <- c(at_email, bk_email)
+# names <- c("Anders Torstensson")
+# emails <- c(at_email)
 to_header <- paste0('"', names, '" <', emails, '>')  # no spaces added
 to_header <- paste(to_header, collapse = ",")        # no spaces after comma
 
 date_string <- format(as.Date(date, "%Y%m%d"), "%Y-%m-%d")
 
 warning_detected <- any(
-  max_counts$counts_per_liter > max_counts$warning_level,
+  max_counts$cell_counts_per_liter > max_counts$warning_level,
   na.rm = TRUE
 )
 
@@ -214,13 +215,13 @@ email_table <- max_counts %>%
       sample,
       '</a>'
     ),
-    alert = !is.na(warning_level) & counts_per_liter > warning_level,
+    alert = !is.na(warning_level) & cell_counts_per_liter > warning_level,
     row_style = ifelse(
       alert,
       ' style="background-color:#ffcccc;font-weight:bold;"',
       ''
     ),
-    counts_per_liter = format(counts_per_liter, big.mark = " ", trim = TRUE),
+    cell_counts_per_liter = format(cell_counts_per_liter, big.mark = " ", trim = TRUE),
     warning_level = ifelse(
       is.na(warning_level),
       "",
@@ -237,8 +238,8 @@ table_rows <- paste0(
       "<td>", x["aphia_id"], "</td>",
       "<td>", x["class_clean"], "</td>",
       "<td>", x["sample"], "</td>",
-      "<td>", x["counts"], "</td>",
-      "<td>", x["counts_per_liter"], "</td>",
+      "<td>", x["cell_counts"], "</td>",
+      "<td>", x["cell_counts_per_liter"], "</td>",
       "<td>", ifelse(is.na(x["warning_level"]), "", x["warning_level"]), "</td>",
       "</tr>"
     )
@@ -252,8 +253,8 @@ html_table <- paste0(
   '<th>Aphia ID</th>',
   '<th>Scientific name</th>',
   '<th>Sample</th>',
-  '<th>Images</th>',
-  '<th>Counts/L</th>',
+  '<th>Cells/filaments</th>',
+  '<th>Cell counts/L</th>',
   '<th>Warning level</th>',
   '</tr>',
   table_rows,
@@ -316,7 +317,7 @@ d <- as.Date(date_string)
 month_day <- format(d, "%m-%d")
 
 warning_detected <- any(
-  cyano_counts$counts_per_liter > cyano_counts$warning_level,
+  cyano_counts$cell_counts_per_liter > cyano_counts$warning_level,
   na.rm = TRUE
 )
 
@@ -337,14 +338,14 @@ email_table <- cyano_counts %>%
       sample,
       '</a>'
     ),
-    alert = !is.na(warning_level) & counts_per_liter > warning_level,
+    alert = !is.na(warning_level) & cell_counts_per_liter > warning_level,
     is_priority = class_clean %in% priority_species,
     row_style = case_when(
       alert        ~ ' style="background-color:#ffcccc;font-weight:bold;"',
       is_priority  ~ ' style="background-color:#d4edda;color:#155724;font-weight:bold;"',
       TRUE         ~ ''
     ),
-    counts_per_liter = format(counts_per_liter, big.mark = " ", trim = TRUE),
+    cell_counts_per_liter = format(cell_counts_per_liter, big.mark = " ", trim = TRUE),
   ) %>%
   arrange(desc(is_priority), class_clean)  # priority species first, then alphabetical
 
@@ -357,8 +358,8 @@ table_rows <- paste0(
       "<td>", x["aphia_id"], "</td>",
       "<td>", x["class_clean"], "</td>",
       "<td>", x["sample"], "</td>",
-      "<td>", x["counts"], "</td>",
-      "<td>", x["counts_per_liter"], "</td>",
+      "<td>", x["cell_counts"], "</td>",
+      "<td>", x["cell_counts_per_liter"], "</td>",
       "</tr>"
     )
   }),
