@@ -86,7 +86,7 @@ classlist_file <- file.path(ifcb_path, "pytorch", "models", classlist_file)
 
 sqlite_path <- file.path(tools::R_user_dir("ClassiPyR", "data"), "annotations.sqlite")
 
-class_folder <- file.path(ifcb_path, "classified", "cellcount_new")
+class_folder <- file.path(ifcb_path, "classified", cnn_model)
 
 # Define the URL of a EEA shapefile and the target directory
 url <- "https://www.eea.europa.eu/data-and-maps/data/eea-coastline-for-analysis-2/gis-data/eea-coastline-polygon/at_download/file"
