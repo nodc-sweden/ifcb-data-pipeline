@@ -52,6 +52,14 @@ size_threshold <- 536870912  # bytes
 # Define which PSD flags to flag in IFCB Dashboard metadata as 'skip'
 skip_flags <- c("Bubbles", "Incomplete Run", "Beads")
 
+# Supplementary bubble check (see code/utils/flag_psd_bubbles_fn.R)
+# Flags samples where >= bubble_min_frac of sized particles have ESD >= bubble_min_esd um
+bubble_min_esd <- 100
+bubble_min_frac <- 0.2
+bubble_min_n <- 5
+
+source(file.path(repo_dir, "code", "utils", "flag_psd_bubbles_fn.R"))
+
 # Use venv
 use_virtualenv(file.path(repo_dir, ".virtualenvs", "features"))
 
@@ -434,7 +442,7 @@ if (length(bins_to_process) > 0) {
 
 # Only extract features if there a any new files to process
 if (length(bins_to_process) > 0) {
-
+  
   cat("Extracting features...\n")
   
   # Extract v4 features
@@ -517,6 +525,14 @@ if (length(bins_to_psd) > 0) {
                   micron_factor = 1/2.77,
                   fea_v = 4,
                   use_plot_subfolders = FALSE)
+  
+  # Supplementary bubble check, catches bubble samples missed by the PSD peak criterion
+  bubble_hits <- flag_psd_bubbles(psd$data,
+                                  min_esd = bubble_min_esd,
+                                  min_frac = bubble_min_frac,
+                                  min_n = bubble_min_n)
+  
+  psd$flags <- add_bubble_flags(psd$flags, bubble_hits$sample)
   
   # Bind data
   psd_data <- bind_rows(psd_data, psd$data)
