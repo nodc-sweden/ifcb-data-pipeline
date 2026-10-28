@@ -27,7 +27,7 @@ suppressPackageStartupMessages({
 
 # ---- config (EDIT PATHS for the raw-data machine) ---------------------------
 cfg <- list(
-  years = c(2016),
+  years = c(2016, 2022, 2023, 2024, 2025, 2026),
 
   # raw .adc/.hdr/.roi per year  (e.g. .../ifcb/data/data/2022)
   raw_root      = "Z:/data/data/%d",
@@ -43,7 +43,7 @@ cfg <- list(
   class_dir       = list(),                      # optional per-year override, e.g.
                                                  #   list(`2016` = ".../class2016_v3")
 
-  out_dir       = "Z:/data/out/roi_level_new",          # gitignored; per-year per-ROI .txt
+  out_dir       = "Z:/data/out/roi_level_blacklist",          # gitignored; per-year per-ROI .txt
   out_format    = "txt",                      # "txt" (tab, gz) or "parquet"
 
   micron_factor   = 1/2.77,                   # CURRENT SMHI factor (was 1/3.4)
@@ -67,12 +67,49 @@ cfg <- list(
   # NB the feature 'Biovolume'/'SurfaceArea' are in PIXEL units; biovolume_um3 (from
   # ifcb_extract_biovolumes, micron-scaled) is authoritative for size. For SA:V keep
   # SA and V in the SAME unit system (both pixel, or scale SA by micron_factor^2).
-  morpho_cols = NULL
+  morpho_cols = NULL,
+
+  # Sample blacklist (tab-separated: sample, reason). Entries are PREFIXES of the
+  # sample ID: a full ID (D20240607T102611_IFCB134) drops one sample, a day
+  # (D20231205) drops that day, a shorter stem (D2026051) drops every sample whose
+  # ID starts with it. Blacklisted samples are removed BEFORE extraction.
+  blacklist_file = "C:/R/ifcb-data-pipeline/data/sample_blacklist.tsv"
 )
 dir.create(cfg$out_dir, recursive = TRUE, showWarnings = FALSE)
 
 # ---- helpers ----------------------------------------------------------------
 strip_sample <- function(x) sub("_(fea.*|class|multiblob).*$", "", tools::file_path_sans_ext(basename(x)))
+
+# read the blacklist; tolerate CRLF, stray whitespace, blank rows and duplicates.
+# Entries that are not sample-ID prefixes (e.g. raw-folder names like
+# "IFCBdata_11_march_2023_...") cannot be matched here and are reported.
+read_blacklist <- function(path) {
+  if (!file.exists(path)) stop("blacklist not found: ", path)
+  bl <- fread(path, sep = "\t", colClasses = "character", encoding = "UTF-8", fill = TRUE)
+  setnames(bl, 1:2, c("entry", "reason"))
+  bl[, `:=`(entry = trimws(entry), reason = trimws(reason))]
+  bl <- unique(bl[nzchar(entry)], by = "entry")
+  bl[, kind := fcase(grepl("^D\\d{8}T\\d{6}_IFCB\\d+$", entry), "sample",
+                     grepl("^D\\d{8}$", entry),                     "day",
+                     grepl("^D\\d{1,7}$", entry),                   "stem",
+                     default = "unmatchable")]
+  message(sprintf("blacklist: %d entries (%s)", nrow(bl),
+                  paste(bl[, .N, by = kind][, sprintf("%s %d", kind, N)], collapse = ", ")))
+  if (any(bl$kind == "stem"))
+    message("  short stems match every sample that starts with them: ",
+            paste(bl[kind == "stem", entry], collapse = ", "))
+  if (any(bl$kind == "unmatchable"))
+    warning("blacklist entries that are not sample-ID prefixes (exclude these at folder level): ",
+            paste(bl[kind == "unmatchable", entry], collapse = "; "), call. = FALSE)
+  bl[kind != "unmatchable"]
+}
+
+# first blacklist entry each sample starts with (NA = keep); returns entry + reason
+match_blacklist <- function(samples, bl) {
+  idx <- rep(NA_integer_, length(samples))
+  for (i in seq_len(nrow(bl))) idx[is.na(idx) & startsWith(samples, bl$entry[i])] <- i
+  data.table(sample = samples, entry = bl$entry[idx], reason = bl$reason[idx])
+}
 
 # resolve the class .h5 folder for a year: explicit override wins; else glob under
 # classified_root. Errors on ambiguity so an old dev folder can't be picked silently.
@@ -145,10 +182,21 @@ process_year <- function(year) {
   }
   stopifnot(dir.exists(feats))
 
+  # 0b) drop blacklisted samples before anything is read. Same listing rule iRfcb
+  # applies to a folder; the class .h5 files are matched to these samples inside
+  # ifcb_extract_biovolumes(), and the h5 score list is filtered below as well.
+  ff <- list.files(feats, pattern = "D.*\\.csv", full.names = TRUE, recursive = TRUE)
+  ff_bl <- match_blacklist(strip_sample(ff), blacklist)
+  excluded <- unique(ff_bl[!is.na(entry)], by = "sample")
+  ff <- ff[is.na(ff_bl$entry)]
+  message(sprintf("  blacklist: %d samples excluded, %d feature files kept",
+                  nrow(excluded), length(ff)))
+  if (length(ff) == 0) stop("no feature files left for ", year, " after the blacklist")
+
   # 1) biovolume + carbon + chain counts (one row per ROI)
   message("  ifcb_extract_biovolumes() ...")
   bv <- iRfcb::ifcb_extract_biovolumes(
-    feature_files = feats, class_files = classd,
+    feature_files = ff, class_files = classd,
     micron_factor = cfg$micron_factor, use_cell_counts = cfg$use_cell_counts,
     drop_zero_volume = cfg$drop_zero_volume,
     diatom_equation = cfg$diatom_equation,
@@ -159,7 +207,7 @@ process_year <- function(year) {
 
   # 2) curated morphometric features
   message("  ifcb_read_features() + select morpho subset ...")
-  fl <- iRfcb::ifcb_read_features(feats, feature_version = cfg$feature_version)
+  fl <- iRfcb::ifcb_read_features(ff, feature_version = cfg$feature_version)
   feat <- rbindlist(lapply(names(fl), function(nm) {
     d <- as.data.table(fl[[nm]]); d[, sample := strip_sample(nm)]
     keep <- if (is.null(cfg$morpho_cols)) setdiff(names(d), c("sample", "roi_number"))
@@ -171,6 +219,7 @@ process_year <- function(year) {
   # 3) class confidence score from production .h5
   message("  reading *_class.h5 scores ...")
   h5s <- list.files(classd, pattern = "_class\\.h5$", full.names = TRUE)
+  h5s <- h5s[is.na(match_blacklist(strip_sample(h5s), blacklist)$entry)]
   scores <- rbindlist(lapply(h5s, read_h5_scores), use.names = TRUE, fill = TRUE)
 
   # 4) assemble (left-join on sample + roi_number; biovolume table is the spine).
@@ -183,6 +232,9 @@ process_year <- function(year) {
     merge(scores[, .(sample, roi_number, class_name, class_name_auto, score, model_name)],
           by = c("sample", "roi_number"), all.x = TRUE)
   setorder(roi, sample, roi_number)
+  leaked <- match_blacklist(unique(roi$sample), blacklist)[!is.na(entry)]
+  if (nrow(leaked) > 0) stop("blacklisted samples in the ", year, " table: ",
+                             paste(head(leaked$sample, 10), collapse = ", "))
 
   # 5) write per-ROI table
   out <- file.path(cfg$out_dir, sprintf("roi_%d.%s", year,
@@ -200,7 +252,9 @@ process_year <- function(year) {
                   n_cells = sum(cell_count_resolved %||% cell_count, na.rm = TRUE),
                   total_biovol_um3 = sum(biovolume_um3, na.rm = TRUE),
                   median_score = median(score, na.rm = TRUE)), by = sample]
-  list(roi_meta = data.table(year = year, n_roi = nrow(roi), n_samples = uniqueN(roi$sample),
+  list(excluded = excluded[, .(year = year, sample, entry, reason)],
+       roi_meta = data.table(year = year, n_roi = nrow(roi), n_samples = uniqueN(roi$sample),
+                             n_blacklisted = nrow(excluded),
                              class_dir = basename(classd),
                              model_name = scores$model_name[1] %||% NA), summary = smry)
 }
@@ -208,6 +262,7 @@ process_year <- function(year) {
 `%||%` <- function(a, b) if (is.null(a) || all(is.na(a))) b else a
 
 # ---- run --------------------------------------------------------------------
+blacklist <- read_blacklist(cfg$blacklist_file)
 results <- lapply(cfg$years, function(y) tryCatch(process_year(y),
                   error = function(e) { message("  YEAR ", y, " FAILED: ", conditionMessage(e)); NULL }))
 results <- Filter(Negate(is.null), results)
@@ -215,6 +270,10 @@ results <- Filter(Negate(is.null), results)
 # per-sample summary across years
 smry_all <- rbindlist(lapply(results, `[[`, "summary"), use.names = TRUE, fill = TRUE)
 fwrite(smry_all, file.path(cfg$out_dir, "sample_summary.txt"), sep = "\t")
+
+# samples removed by the blacklist, with the entry that matched them
+excl_all <- rbindlist(lapply(results, `[[`, "excluded"), use.names = TRUE, fill = TRUE)
+fwrite(excl_all, file.path(cfg$out_dir, "excluded_samples.txt"), sep = "\t")
 
 # ---- reproducibility sidecar ------------------------------------------------
 desc <- tryCatch(packageDescription("iRfcb"), error = function(e) NULL)
@@ -232,6 +291,9 @@ meta <- c(
   sprintf("classifiers (VERIFY = production, not dev): %s",
           paste(sapply(results, function(r) sprintf("%s -> %s [%s]",
                 r$roi_meta$year, r$roi_meta$model_name, r$roi_meta$class_dir)), collapse = "; ")),
+  sprintf("blacklist: %s (md5 %s, modified %s, %d usable entries) -> %d samples excluded, listed in excluded_samples.txt",
+          normalizePath(cfg$blacklist_file), unname(tools::md5sum(cfg$blacklist_file)),
+          format(file.mtime(cfg$blacklist_file), "%Y-%m-%d %H:%M"), nrow(blacklist), nrow(excl_all)),
   sprintf("note: sample volume (ml analyzed) NOT here -> join data.txt SMVOL by SMPNO")
 )
 writeLines(meta, file.path(cfg$out_dir, "extraction_metadata.txt"))
