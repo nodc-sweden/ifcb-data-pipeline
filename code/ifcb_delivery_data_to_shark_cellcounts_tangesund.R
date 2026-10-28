@@ -53,7 +53,7 @@ dashboard_dataset <- "Tangesund"
 # Tångesund was only sampled in 2016 (IFCB110)
 year <- 2016
 
-remove_flagged_data <- c("bubbles", "incomplete")
+remove_flagged_data <- c("bubbles", "incomplete", "beads")
 
 ifcb_path <- Sys.getenv("ifcb_path")
 ifcb_base_path <- Sys.getenv("ifcb_base_path")
@@ -445,6 +445,12 @@ if ("bubbles" %in% remove_flagged_data) {
 data_aggregated <- data_aggregated[!sapply(data_aggregated$flag, function(x) {
   any(sapply(remove_flagged_data, function(y) grepl(y, tolower(x), fixed = TRUE)))
 }), ]
+
+# Filter data sampled within 500 m of land (NA = missing position, kept)
+if ("near land" %in% remove_flagged_data) {
+  data_aggregated <- data_aggregated %>%
+    filter(!(as.logical(near_land) %in% TRUE))
+}
 
 # Filter blacklisted data
 data_aggregated <- data_aggregated %>%

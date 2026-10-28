@@ -26,7 +26,7 @@ suppressPackageStartupMessages({
 # Configuration
 # -------------------------------
 
-remove_flagged_data <- c("bubbles", "incomplete", "near land")
+remove_flagged_data <- c("bubbles", "incomplete", "beads", "near land")
 
 year <- as.numeric(format(Sys.Date(), "%Y"))
 class_score_version <- 1
@@ -590,6 +590,12 @@ if ("bubbles" %in% remove_flagged_data) {
 data_aggregated <- data_aggregated[!sapply(data_aggregated$flag, function(x) {
   any(sapply(remove_flagged_data, function(y) grepl(y, tolower(x), fixed = TRUE)))
 }), ]
+
+# Filter data sampled within 500 m of land (NA = missing position, kept)
+if ("near land" %in% remove_flagged_data) {
+  data_aggregated <- data_aggregated %>%
+    filter(!(as.logical(near_land) %in% TRUE))
+}
 
 # Filter blacklisted data
 data_aggregated <- data_aggregated %>%
