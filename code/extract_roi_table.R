@@ -12,6 +12,10 @@
 #       (SurfaceArea/Biovolume), and max/minFeretDiameter give elongation.
 #   - per-ROI class + classification confidence score from the production *_class.h5
 #
+# Samples the SHARK delivery rejects are dropped BEFORE extraction: the manual
+# blacklist, PSD flags (Bubbles, Incomplete, Beads, plus the neighbours of each
+# Bubbles sample) and, except for 2016 (Tångesund), samples within 500 m of land.
+#
 # Sample volume is NOT stored here — it lives in data.txt (SMVOL, the analyzed mL,
 # ~5 mL) and is joined later by SMPNO. A per-sample summary table is written for QC.
 #
@@ -38,12 +42,12 @@ cfg <- list(
   # production classifier output: one D..._class.h5 per sample. Folder names vary
   # (e.g. class2016_v3, class2024_v1, ...) so resolve by GLOB per year rather than
   # assume a suffix. If the glob matches >1 dir the script errors -> use class_dir.
-  classified_root = "Z:/data/classified/SMHI-NIVA-SYKE-SAMS-SZN-ResNet50-V6_1",
+  classified_root = "Z:/data/classified/SMHI-NIVA-SYKE-SAMS-SZN-PML-ResNet50-V7",
   class_glob      = "class%d_v3*",                 # %d -> year
   class_dir       = list(),                      # optional per-year override, e.g.
                                                  #   list(`2016` = ".../class2016_v3")
 
-  out_dir       = "Z:/data/out/roi_level_blacklist",          # gitignored; per-year per-ROI .txt
+  out_dir       = "Z:/data/roi_level",          # gitignored; per-year per-ROI .txt
   out_format    = "txt",                      # "txt" (tab, gz) or "parquet"
 
   micron_factor   = 1/2.77,                   # CURRENT SMHI factor (was 1/3.4)
@@ -73,7 +77,28 @@ cfg <- list(
   # sample ID: a full ID (D20240607T102611_IFCB134) drops one sample, a day
   # (D20231205) drops that day, a shorter stem (D2026051) drops every sample whose
   # ID starts with it. Blacklisted samples are removed BEFORE extraction.
-  blacklist_file = "C:/R/ifcb-data-pipeline/data/sample_blacklist.tsv"
+  blacklist_file = "C:/R/ifcb-data-pipeline/data/sample_blacklist.tsv",
+
+  # PSD QC flags (iRfcb::ifcb_psd via ifcb_ingest_and_qc.R; one csv per year with
+  # columns sample, flag). Same rule as the SHARK delivery
+  # (ifcb_delivery_data_to_shark_cellcounts.R): a sample is dropped when its flag
+  # CONTAINS any of psd_remove_flags (case-insensitive, so "Incomplete Run" matches),
+  # and the samples immediately before and after each Bubbles sample are dropped too
+  # (they often hold poor images). A missing flags file stops the year.
+  psd_flags_file   = "Z:/data/psd/psd_%d_flags.csv",
+  psd_remove_flags = c("bubbles", "incomplete", "beads"),
+
+  # Near-land exclusion, as in the delivery: positions from the IFCB Dashboard
+  # metadata, samples within near_land_m of the EEA coastline (2017 shapefile,
+  # iRfcb default small-island removal) dropped; samples without a position kept.
+  # Applied to every year EXCEPT near_land_skip_years: 2016 is Tångesund, a fixed
+  # coastal station whose delivery keeps every sample. coastline_shp = NULL fetches
+  # the same EEA coastline from the EEA ArcGIS service (iRfcb source = "eea").
+  near_land_skip_years = c(2016),
+  near_land_m       = 500,
+  coastline_shp     = "C:/R/ifcb-data-pipeline/data/shapefiles/EEA_Coastline_Polygon_Shape/EEA_Coastline_20170228.shp",
+  dashboard_url     = "https://ifcb-dashboard-utv.smhi.se/",
+  dashboard_dataset = "RV_Svea"
 )
 dir.create(cfg$out_dir, recursive = TRUE, showWarnings = FALSE)
 
@@ -109,6 +134,56 @@ match_blacklist <- function(samples, bl) {
   idx <- rep(NA_integer_, length(samples))
   for (i in seq_len(nrow(bl))) idx[is.na(idx) & startsWith(samples, bl$entry[i])] <- i
   data.table(sample = samples, entry = bl$entry[idx], reason = bl$reason[idx])
+}
+
+# PSD flags for a year, one row per sample (repeated rows from re-runs collapsed).
+# Older files carry a leading unnamed index column; only sample + flag are kept.
+read_psd_flags <- function(year) {
+  path <- sprintf(cfg$psd_flags_file, year)
+  if (!file.exists(path)) stop("PSD flags file not found for ", year, ": ", path)
+  fl <- fread(path, colClasses = "character", encoding = "UTF-8")
+  if (!all(c("sample", "flag") %in% names(fl))) stop("no sample/flag columns in ", path)
+  fl <- fl[!is.na(flag) & nzchar(flag), .(flag = paste(unique(flag), collapse = ", ")), by = sample]
+  list(flags = fl, path = path)
+}
+
+# samples to drop on PSD flags, plus the neighbours of each Bubbles sample. Neighbours
+# are taken in sample-ID (= time) order among ALL the year's samples, before any other
+# exclusion, as the delivery does. Returns sample, rule, detail.
+psd_exclusions <- function(samples, fl) {
+  samples <- sort(unique(samples))
+  flag <- fl$flag[match(samples, fl$sample)]
+  hit  <- !is.na(flag) & Reduce(`|`, lapply(cfg$psd_remove_flags, function(y)
+            grepl(y, tolower(flag), fixed = TRUE)))
+  out <- data.table(sample = samples[hit], rule = "psd_flag", detail = flag[hit])
+  if ("bubbles" %in% cfg$psd_remove_flags) {
+    b  <- which(!is.na(flag) & grepl("bubbles", tolower(flag), fixed = TRUE))
+    nb <- data.table(i = c(b - 1L, b + 1L), src = samples[c(b, b)])[i >= 1 & i <= length(samples)]
+    out <- rbind(out, data.table(sample = samples[nb$i], rule = "bubble_neighbour",
+                                 detail = paste("next to", nb$src)))
+  }
+  unique(out, by = "sample")
+}
+
+# sample positions from the IFCB Dashboard (the delivery's source); -999 = no fix
+load_positions <- function() {
+  md <- as.data.table(iRfcb::ifcb_download_dashboard_metadata(cfg$dashboard_url,
+                                                              cfg$dashboard_dataset, quiet = TRUE))
+  md <- md[, .(sample = pid, lat = as.numeric(latitude), lon = as.numeric(longitude))]
+  md[lat == -999 | lon == -999, `:=`(lat = NA_real_, lon = NA_real_)]
+  unique(md, by = "sample")
+}
+
+# samples within near_land_m of land; also returns the number with no position
+near_land_exclusions <- function(samples, pos) {
+  p <- pos[data.table(sample = unique(samples)), on = "sample"]
+  ok <- p[!is.na(lat) & !is.na(lon)]
+  near <- if (nrow(ok) == 0) logical(0) else
+    iRfcb::ifcb_is_near_land(ok$lat, ok$lon, distance = cfg$near_land_m,
+                             shape = cfg$coastline_shp, source = "eea", verbose = FALSE)
+  list(excl = ok[near %in% TRUE, .(sample, rule = "near_land",
+                                   detail = sprintf("%.4f N %.4f E", lat, lon))],
+       n_no_position = nrow(p) - nrow(ok))
 }
 
 # resolve the class .h5 folder for a year: explicit override wins; else glob under
@@ -182,16 +257,27 @@ process_year <- function(year) {
   }
   stopifnot(dir.exists(feats))
 
-  # 0b) drop blacklisted samples before anything is read. Same listing rule iRfcb
-  # applies to a folder; the class .h5 files are matched to these samples inside
-  # ifcb_extract_biovolumes(), and the h5 score list is filtered below as well.
+  # 0b) drop excluded samples before anything is read: blacklist, PSD flags (+ Bubbles
+  # neighbours), near land. Same listing rule iRfcb applies to a folder; the class .h5
+  # files are matched to these samples inside ifcb_extract_biovolumes(), and the h5
+  # score list is filtered below as well. A sample is listed once, under the first rule.
   ff <- list.files(feats, pattern = "D.*\\.csv", full.names = TRUE, recursive = TRUE)
-  ff_bl <- match_blacklist(strip_sample(ff), blacklist)
-  excluded <- unique(ff_bl[!is.na(entry)], by = "sample")
-  ff <- ff[is.na(ff_bl$entry)]
-  message(sprintf("  blacklist: %d samples excluded, %d feature files kept",
-                  nrow(excluded), length(ff)))
-  if (length(ff) == 0) stop("no feature files left for ", year, " after the blacklist")
+  ff_samples <- strip_sample(ff)
+  bl_hit <- match_blacklist(unique(ff_samples), blacklist)[!is.na(entry)]
+  psd <- read_psd_flags(year)
+  nl <- if (!year %in% cfg$near_land_skip_years) near_land_exclusions(ff_samples, positions)
+        else list(excl = NULL, n_no_position = NA_integer_)
+  excluded <- unique(rbind(
+    bl_hit[, .(sample, rule = "blacklist", detail = paste0(entry, ": ", reason))],
+    psd_exclusions(ff_samples, psd$flags),
+    nl$excl), by = "sample")
+  ff <- ff[!ff_samples %in% excluded$sample]
+  message(sprintf("  excluded %d samples (%s), %d feature files kept", nrow(excluded),
+                  paste(excluded[, .N, by = rule][, sprintf("%s %d", rule, N)], collapse = ", "),
+                  length(ff)))
+  if (!is.na(nl$n_no_position) && nl$n_no_position > 0)
+    message(sprintf("  near land: %d samples without a dashboard position kept", nl$n_no_position))
+  if (length(ff) == 0) stop("no feature files left for ", year, " after the exclusions")
 
   # 1) biovolume + carbon + chain counts (one row per ROI)
   message("  ifcb_extract_biovolumes() ...")
@@ -219,7 +305,8 @@ process_year <- function(year) {
   # 3) class confidence score from production .h5
   message("  reading *_class.h5 scores ...")
   h5s <- list.files(classd, pattern = "_class\\.h5$", full.names = TRUE)
-  h5s <- h5s[is.na(match_blacklist(strip_sample(h5s), blacklist)$entry)]
+  h5s <- h5s[!strip_sample(h5s) %in% excluded$sample &
+             is.na(match_blacklist(strip_sample(h5s), blacklist)$entry)]
   scores <- rbindlist(lapply(h5s, read_h5_scores), use.names = TRUE, fill = TRUE)
 
   # 4) assemble (left-join on sample + roi_number; biovolume table is the spine).
@@ -232,9 +319,10 @@ process_year <- function(year) {
     merge(scores[, .(sample, roi_number, class_name, class_name_auto, score, model_name)],
           by = c("sample", "roi_number"), all.x = TRUE)
   setorder(roi, sample, roi_number)
-  leaked <- match_blacklist(unique(roi$sample), blacklist)[!is.na(entry)]
-  if (nrow(leaked) > 0) stop("blacklisted samples in the ", year, " table: ",
-                             paste(head(leaked$sample, 10), collapse = ", "))
+  leaked <- union(match_blacklist(unique(roi$sample), blacklist)[!is.na(entry), sample],
+                  intersect(unique(roi$sample), excluded$sample))
+  if (length(leaked) > 0) stop("excluded samples in the ", year, " table: ",
+                               paste(head(leaked, 10), collapse = ", "))
 
   # 5) write per-ROI table
   out <- file.path(cfg$out_dir, sprintf("roi_%d.%s", year,
@@ -252,9 +340,14 @@ process_year <- function(year) {
                   n_cells = sum(cell_count_resolved %||% cell_count, na.rm = TRUE),
                   total_biovol_um3 = sum(biovolume_um3, na.rm = TRUE),
                   median_score = median(score, na.rm = TRUE)), by = sample]
-  list(excluded = excluded[, .(year = year, sample, entry, reason)],
+  n_rule <- function(r) excluded[rule == r, .N]
+  list(excluded = excluded[, .(year = year, sample, rule, detail)],
+       psd_flags = data.table(year = year, path = psd$path,
+                              md5 = unname(tools::md5sum(psd$path))),
        roi_meta = data.table(year = year, n_roi = nrow(roi), n_samples = uniqueN(roi$sample),
-                             n_blacklisted = nrow(excluded),
+                             n_blacklisted = n_rule("blacklist"), n_psd_flag = n_rule("psd_flag"),
+                             n_bubble_neighbour = n_rule("bubble_neighbour"),
+                             n_near_land = n_rule("near_land"), n_no_position = nl$n_no_position,
                              class_dir = basename(classd),
                              model_name = scores$model_name[1] %||% NA), summary = smry)
 }
@@ -263,6 +356,9 @@ process_year <- function(year) {
 
 # ---- run --------------------------------------------------------------------
 blacklist <- read_blacklist(cfg$blacklist_file)
+if (!is.null(cfg$coastline_shp) && !file.exists(cfg$coastline_shp))
+  stop("coastline shapefile not found: ", cfg$coastline_shp, " (set NULL to use the EEA service)")
+positions <- if (!all(cfg$years %in% cfg$near_land_skip_years)) load_positions() else NULL
 results <- lapply(cfg$years, function(y) tryCatch(process_year(y),
                   error = function(e) { message("  YEAR ", y, " FAILED: ", conditionMessage(e)); NULL }))
 results <- Filter(Negate(is.null), results)
@@ -271,9 +367,11 @@ results <- Filter(Negate(is.null), results)
 smry_all <- rbindlist(lapply(results, `[[`, "summary"), use.names = TRUE, fill = TRUE)
 fwrite(smry_all, file.path(cfg$out_dir, "sample_summary.txt"), sep = "\t")
 
-# samples removed by the blacklist, with the entry that matched them
+# excluded samples with the rule that removed them (blacklist, psd_flag,
+# bubble_neighbour, near_land) and what matched (entry, flag, Bubbles sample, position)
 excl_all <- rbindlist(lapply(results, `[[`, "excluded"), use.names = TRUE, fill = TRUE)
 fwrite(excl_all, file.path(cfg$out_dir, "excluded_samples.txt"), sep = "\t")
+psd_all <- rbindlist(lapply(results, `[[`, "psd_flags"))
 
 # ---- reproducibility sidecar ------------------------------------------------
 desc <- tryCatch(packageDescription("iRfcb"), error = function(e) NULL)
@@ -291,9 +389,18 @@ meta <- c(
   sprintf("classifiers (VERIFY = production, not dev): %s",
           paste(sapply(results, function(r) sprintf("%s -> %s [%s]",
                 r$roi_meta$year, r$roi_meta$model_name, r$roi_meta$class_dir)), collapse = "; ")),
-  sprintf("blacklist: %s (md5 %s, modified %s, %d usable entries) -> %d samples excluded, listed in excluded_samples.txt",
+  sprintf("blacklist: %s (md5 %s, modified %s, %d usable entries)",
           normalizePath(cfg$blacklist_file), unname(tools::md5sum(cfg$blacklist_file)),
-          format(file.mtime(cfg$blacklist_file), "%Y-%m-%d %H:%M"), nrow(blacklist), nrow(excl_all)),
+          format(file.mtime(cfg$blacklist_file), "%Y-%m-%d %H:%M"), nrow(blacklist)),
+  sprintf("psd_flags: drop flags containing %s, plus the samples before/after each Bubbles sample; files: %s",
+          paste(cfg$psd_remove_flags, collapse = ", "),
+          paste(sprintf("%s (md5 %s)", psd_all$path, psd_all$md5), collapse = "; ")),
+  sprintf("near_land: within %s m, all years except %s, coastline %s, positions %s dataset %s (no position = kept)",
+          cfg$near_land_m, paste(cfg$near_land_skip_years, collapse = ", "),
+          cfg$coastline_shp %||% "EEA ArcGIS service (iRfcb source = eea)",
+          cfg$dashboard_url, cfg$dashboard_dataset),
+  sprintf("excluded: %d samples (%s), listed with rule + detail in excluded_samples.txt",
+          nrow(excl_all), paste(excl_all[, .N, by = rule][, sprintf("%s %d", rule, N)], collapse = ", ")),
   sprintf("note: sample volume (ml analyzed) NOT here -> join data.txt SMVOL by SMPNO")
 )
 writeLines(meta, file.path(cfg$out_dir, "extraction_metadata.txt"))
