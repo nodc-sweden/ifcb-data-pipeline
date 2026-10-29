@@ -616,8 +616,12 @@ shark_df <- shark_col %>%
   mutate(MYEAR = data_aggregated$year,
          STATN = station_name,
          SAMPLING_PLATFORM = data_aggregated$platform,
-         PROJ = ifelse(year < 2025, "IFCB, DTO, JERICO", "IFCB"),
-         ORDERER = "SMHI",
+         PROJ = dplyr::case_when(
+           year < 2025 ~ "IFCB, DTO, JERICO",
+           year < 2026 ~ "IFCB",
+           TRUE        ~ "IFCB, NAT"
+         ),
+         ORDERER = ifelse(year < 2026, "SMHI", "SMHI, HAV"),
          SHIPC = "77SE",
          CRUISE_NO = data_aggregated$cruise,
          SDATE = data_aggregated$date,
@@ -666,10 +670,14 @@ shark_df <- shark_col %>%
                        "https://github.com/WHOIGit/ifcb-features/releases/tag/v1.0.0",
                        "https://github.com/EuropeanIFCBGroup/iRfcb",
                        sep = ", "), # METHOD
-         TRAINING_SET = "https://doi.org/10.17044/scilifelab.25883455.v6",
+         TRAINING_SET = paste("https://doi.org/10.17044/scilifelab.25883455.v6",
+                              "https://doi.org/10.5281/zenodo.17601020",
+                              "https://doi.org/10.5281/zenodo.15471023",
+                              "https://ifcb-portal.sams.ac.uk/annotatedImages/",
+                              sep = ", "),
          CLASSIFIER_USED = basename(gsub("\\\\", "/", iconv(data_aggregated$classifier, from = "Windows-1252", to = "UTF-8"))),
          MANUAL_QC_DATE = as.Date(Sys.Date()),
-         PRE_FILTER_SIZE ="150", # unit um
+         PRE_FILTER_SIZE = "150", # unit um
          UNCLASSIFIED_COUNTS = round(data_aggregated$unclassified_counts, 1),
          UNCLASSIFIED_ABUNDANCE = signif(data_aggregated$unclassified_abundance, 6),
          UNCLASSIFIED_VOLUME = signif(data_aggregated$unclassified_volume, 6),
