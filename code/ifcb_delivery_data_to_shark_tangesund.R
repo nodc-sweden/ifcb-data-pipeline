@@ -1,4 +1,15 @@
-# 
+# Tångesund (IFCB110, 2016) cell-count data delivery to SHARK.
+#
+# This is the Tångesund counterpart of ifcb_delivery_data_to_shark_cellcounts.R.
+# Tångesund was sampled at a fixed location (Hakefjorden) but at different depths,
+# so the metadata is handled differently than the R/V Svea ferrybox dataset:
+#   - Sample metadata is downloaded from the "Tangesund" dashboard dataset, which
+#     already carries the fixed position and per-sample depth.
+#   - There is no ferrybox or SVEPA cruise data for 2016, so those steps are dropped
+#     and the *_FB columns are reported as NA.
+#   - Station/metadata fields differ: STATN = "Tangesund", SHIPC = NA, PDMET = "SEP",
+#     SMTYP = "IFCB", MNDEP/MXDEP from the per-sample depth, SMPNO = full pid.
+# Classification follows the pytorch V6 cell-count pipeline, identical to the Svea script.
 
 # Use the default venv for this script
 Sys.setenv(USE_IRFCB_PYTHON = TRUE)
@@ -32,21 +43,21 @@ source("code/utils/clean_taxa_fn.R")
 # Configuration
 # -------------------------------
 
-internal_use <- TRUE
+internal_use <- FALSE
 cnn_model <- "SMHI-NIVA-SYKE-SAMS-SZN-ResNet50-V6_1" # niva_smhi_baltic or NA for MATLAB
 threshold_file <- "V6_1/V6_1-resnet50_dataset_squarepad_augmented_b64_lr0.0001_e30_thresholds_and_metrics.json"
 classlist_file <- "V6_1-resnet50_dataset_squarepad_augmented_b64_lr0.0001_e30_classes.txt"
-instrument_number <- "IFCB134"
+instrument_number <- "IFCB110"
+dashboard_dataset <- "Tangesund"
 
-year <- as.numeric(format(Sys.Date(), "%Y"))
-year <- 2026
+# Tångesund was only sampled in 2016 (IFCB110)
+year <- 2016
 
-remove_flagged_data <- c("bubbles", "incomplete", "beads", "near land")
+remove_flagged_data <- c("bubbles", "incomplete", "beads")
 
 ifcb_path <- Sys.getenv("ifcb_path")
 ifcb_base_path <- Sys.getenv("ifcb_base_path")
 havgem_path <- Sys.getenv("havgem_path")
-ferrybox_path <- Sys.getenv("ferrybox_path")
 repo_dir <- Sys.getenv("repo_path")
 smtp_server <- Sys.getenv("SMTP_SERVER")
 at_email <- Sys.getenv("at_email")
@@ -54,7 +65,7 @@ bk_email <- Sys.getenv("bk_email")
 ifcb_email <- Sys.getenv("ifcb_email")
 
 if (internal_use) {
-  output_folder <- file.path(havgem_path, "data_internal", "cell_counts_new")
+  output_folder <- file.path(havgem_path, "data_internal")
 } else {
   output_folder <- file.path(havgem_path, "data_to_shark")
 }
@@ -62,10 +73,10 @@ if (internal_use) {
 output_folder <- file.path(output_folder, cnn_model)
 
 # Define data deliviery path
-data_delivery_path <- file.path(output_folder, 
-                                paste0("SHARK_PlanktonImaging_", 
-                                       as.character(year), 
-                                       "_SMHI"))
+data_delivery_path <- file.path(output_folder,
+                                paste0("SHARK_PlanktonImaging_",
+                                       as.character(year),
+                                       "_Tangesund_SMHI"))
 
 # Define paths for processed, received, and correspondence data folders for current year
 processed_data <- file.path(data_delivery_path, "processed_data")
@@ -96,21 +107,21 @@ shapefile_path <- file.path(extracted_dir, "EEA_Coastline_20170228.shp")
 
 # Check if the shapefile already exists
 if (!file.exists(shapefile_path)) {
-  
+
   # Create the target directory if it doesn't exist
   if (!dir.exists(extracted_dir)) {
     dir.create(extracted_dir, recursive = TRUE)
   }
-  
+
   # Download the ZIP file
   download.file(url, zip_file, mode = "wb")
-  
+
   # Extract the ZIP file
   unzip(zip_file, exdir = extracted_dir)
-  
+
   # Optionally, remove the downloaded ZIP file after extraction
   file.remove(zip_file)
-  
+
   message("File downloaded and extracted.")
 } else {
   message("Shapefile already exists. No download needed.")
@@ -128,8 +139,8 @@ combined_class_files <- list.files(class_folder, ".h5", full.names = TRUE, recur
 combined_class_files <- combined_class_files[grepl(paste0("D", year), basename(combined_class_files))]
 class_bins <- gsub("_class.h5", "", basename(combined_class_files))
 
-# Download sample metadata
-metadata <- ifcb_download_dashboard_metadata("https://ifcb-dashboard-utv.smhi.se/", "RV_Svea")
+# Download sample metadata (Tångesund dataset carries fixed position and per-sample depth)
+metadata <- ifcb_download_dashboard_metadata("https://ifcb-dashboard-utv.smhi.se/", dashboard_dataset)
 
 # Filter classified bins
 metadata_selected <- metadata %>%
@@ -144,14 +155,14 @@ blacklist_pattern <- paste(blacklist$sample, collapse = "|")
 if (file.exists(file.path(processed_data, "data.txt"))) {
   # Read already delivered data
   delivered_data <- read_tsv(file.path(processed_data, "data.txt"), progress = FALSE, col_types = cols())
-  
+
   # Identify the last 50 samples that have been classified
   valid_class_bins <- class_bins[!grepl(blacklist_pattern, class_bins)]
   last_50_samples <- sort(valid_class_bins, decreasing = TRUE)[1:50]
-  
+
   # Check if any of the last 50 bins are already delivered
   all_delivered <- any(last_50_samples %in% delivered_data$SMPNO)
-  
+
   # Stop if all data are already delivered
   if (all_delivered) {
     message("No rows in data frame, stopping script.")
@@ -171,7 +182,7 @@ metadata_selected$near_land[valid_idx] <- as.character(
   iRfcb::ifcb_is_near_land(
     latitudes = metadata_selected$latitude[valid_idx],
     longitudes = metadata_selected$longitude[valid_idx],
-    distance = 500,
+    distance = 0,
     shape = shapefile_path
   )
 )
@@ -183,41 +194,8 @@ metadata_selected$near_land[!valid_idx] <- NA
 psd_flags <- read_csv(psd_flags_file, show_col_types = FALSE, progress = FALSE, name_repair = "unique_quiet") %>%
   dplyr::select(-dplyr::any_of("...1"))
 
-# Select ferrybox parameters to retrieve
-ferrybox_parameters <- c("70", "80070", "8063", "88063", "8165", "88165", "8173", 
-                         "88173", "8166","88166", "8172", "88172", "8174", "88174", 
-                         "8177", "88177", "8179", "88179", "8181", "88181", "8190", 
-                         "88190", "8191", "88191")
-
-# Extract timestamps to get ferrybox data from
-timestamps <- as.POSIXct(metadata_selected$sample_time)
-
-cat("Getting ferrybox data...\n")
-
-# Retrieve ferrybox data
-ferrybox_data <- ifcb_get_ferrybox_data(timestamps, ferrybox_path, parameters = ferrybox_parameters,
-                                        max_time_diff_min = 5)
-
-if (!internal_use) {
-  # Set as NA if QC is not 1 (=Good)
-  ferrybox_data <- ferrybox_data %>%
-    mutate(`80070` = ifelse(`70` == 1, `80070`, NA),
-           `8063` = ifelse(`88063` == 1, `8063`, NA),
-           `8165` = ifelse(`88165` == 1, `8165`, NA),
-           `8173` = ifelse(`88173` == 1, `8173`, NA),
-           `8166` = ifelse(`88166` == 1, `8166`, NA),
-           `8172` = ifelse(`88172` == 1, `8172`, NA),
-           `8174` = ifelse(`88174` == 1, `8174`, NA),
-           `8177` = ifelse(`88177` == 1, `8177`, NA),
-           `8179` = ifelse(`88179` == 1, `8179`, NA),
-           `8181` = ifelse(`88181` == 1, `8181`, NA),
-           `8190` = ifelse(`88190` == 1, `8190`, NA),
-           `8191` = ifelse(`88191` == 1, `8191`, NA),
-    )
-}
-
-# Add ferrybox data to metadata
-metadata_selected <- bind_cols(metadata_selected, ferrybox_data)
+# No ferrybox or SVEPA cruise data exist for Tångesund 2016; those steps are skipped
+# and the *_FB parameters are reported as NA in the SHARK output.
 
 cat("Calculating biovolume and biomass data...\n")
 
@@ -257,10 +235,9 @@ if (nrow(annotations) > 0) {
     drop_zero_volume = FALSE,
     use_cell_counts = FALSE,
     diatom_equation = "auto",
-    carbon_conversion = "roi",
-    single_cell_values = c(-1, 0)
+    carbon_conversion = "roi"
   )
-  
+
   # Manual annotations are single-image verifications (no chain counting);
   # treat each ROI as one cell so columns align with the autoclass data.
   manual_biovolumes$cell_counts <- manual_biovolumes$counts
@@ -293,9 +270,9 @@ manual_analysis_dates <- annotations %>%
 autoclass_analysis_dates <- data.frame(sample = NULL, analysis_date = NULL)
 for (mat in combined_class_files) {
   file_info <- file.info(mat)$ctime
-  
+
   temp <- data.frame(sample = sub("_class.h5", "", basename(mat)), analysis_date = as.Date(file_info))
-  
+
   autoclass_analysis_dates <- rbind(autoclass_analysis_dates, temp)
 }
 
@@ -324,7 +301,7 @@ class_names <- clean_taxa(taxa_names) %>%
 
 autoclass_joined <- biovolumes %>%
   left_join(ifcb_convert_filenames(metadata_selected$pid), by ="sample") %>%
-  left_join(select(metadata_selected, -ml_analyzed, -timestamp), by = c("sample" = "pid")) %>%
+  left_join(select(metadata_selected, -ml_analyzed), by = c("sample" = "pid")) %>%
   left_join(psd_flags, by ="sample") %>%
   left_join(class_names, by = "class") %>%
   left_join(class_scores, by = "class") %>%
@@ -335,7 +312,7 @@ autoclass_joined <- biovolumes %>%
          classifier_created_by = "Anders Torstensson",
          # classifier_used = paste0("SMHI-", params$classifier, " v.", max_versions[[i]]),
          metoa = "IMA-SW",
-         associated_media = NA,
+         associated_media = "https://habon-ifcb.whoi.edu/timeline?dataset=tangosund",
          class_prog = "https://github.com/nodc-sweden/ifcb-pytorch-classify/releases/tag/v0.2.0")
 
 autoclass_aggregated <- autoclass_joined %>%
@@ -355,7 +332,7 @@ autoclass_aggregated <- autoclass_joined %>%
     cell_counts_per_liter = sum(cell_counts_per_liter, na.rm = TRUE),
     biovolume_mm3_per_liter = sum(biovolume_mm3_per_liter, na.rm = TRUE),
     carbon_ug_per_liter = sum(carbon_ug_per_liter, na.rm = TRUE),
-    
+
     # Concatenate these fields
     class = paste(class, collapse = ", "),
     # class_id = paste(class_id, collapse = ", "),
@@ -364,7 +341,7 @@ autoclass_aggregated <- autoclass_joined %>%
     recall = paste(recall, collapse = ",  "),
     support = paste(support, collapse = ", "),
     f1 = paste(round(f1, 3)*100, collapse = ", "),
-    
+
     # Keep first value of all other columns (assumed identical)
     across(
       -c(counts, cell_counts, biovolume_mm3, carbon_ug, ml_analyzed,
@@ -378,7 +355,7 @@ autoclass_aggregated <- autoclass_joined %>%
 
 manual_joined <- manual_biovolumes %>%
   left_join(ifcb_convert_filenames(metadata_selected$pid), by ="sample") %>%
-  left_join(select(metadata_selected, -ml_analyzed, -timestamp), by = c("sample" = "pid")) %>%
+  left_join(select(metadata_selected, -ml_analyzed), by = c("sample" = "pid")) %>%
   left_join(psd_flags, by ="sample") %>%
   left_join(class_names, by = "class") %>%
   left_join(manual_analysis_dates, by = "sample") %>%
@@ -388,7 +365,7 @@ manual_joined <- manual_biovolumes %>%
          classifier_created_by = NA,
          classifier_used = NA,
          metoa = "IMA",
-         associated_media = "https://ecotaxa.obs-vlfr.fr/prj/822, https://ecotaxa.obs-vlfr.fr/prj/14392",
+         associated_media = "https://ecotaxa.obs-vlfr.fr/prj/899",
          class_prog = "https://github.com/EuropeanIFCBGroup/ClassiPyR/releases/tag/v0.2.1")
 
 # Aggregate based on scientific name
@@ -407,10 +384,10 @@ manual_aggregated <- manual_joined %>%
     cell_counts_per_liter = sum(cell_counts_per_liter, na.rm = TRUE),
     biovolume_mm3_per_liter = sum(biovolume_mm3_per_liter, na.rm = TRUE),
     carbon_ug_per_liter = sum(carbon_ug_per_liter, na.rm = TRUE),
-    
+
     # Concatenate these fields
     class = paste(class, collapse = ","),
-    
+
     # Keep first value of all other columns (assumed identical)
     across(
       -c(counts, cell_counts, biovolume_mm3, carbon_ug, ml_analyzed,
@@ -435,29 +412,29 @@ if (nrow(manual_aggregated) > 0) {
 
 # Remove samples before and after a bubble run, as these samples often contain poor images
 if ("bubbles" %in% remove_flagged_data) {
-  
+
   # Identify the indices where the flag contains "bubbles"
   bubbles_indices <- which(grepl("bubbles", tolower(data_aggregated$flag), fixed = TRUE))
-  
+
   # Find the indices before and after the "bubbles" samples
   before_indices <- bubbles_indices - 1
   after_indices <- bubbles_indices + 1
-  
+
   # Remove indices that are out of bounds
   before_indices <- before_indices[before_indices > 0]
   after_indices <- after_indices[after_indices <= nrow(data_aggregated)]
-  
+
   # Extract the samples before and after the "bubbles" samples
   samples_before <- data_aggregated$sample[before_indices]
   samples_after <- data_aggregated$sample[after_indices]
-  
+
   # Combine the results into a data frame for easier viewing
   adjacent_bubble_samples <- data.frame(
     BubblesSample = data_aggregated$sample[bubbles_indices],
     SampleBefore = samples_before,
     SampleAfter = samples_after
   )
-  
+
   # Remove data from samples before and after bubble runs
   data_aggregated <- data_aggregated %>%
     filter(!sample %in% adjacent_bubble_samples$SampleBefore) %>%
@@ -484,11 +461,11 @@ is_all_na <- function(x) {
   all(is.na(x))
 }
 
-# Extract unclassified data and ferrybox data
+# Extract unclassified data (no ferrybox columns exist for Tångesund)
 unclassified <- data_aggregated %>%
   filter(class_clean == "unclassified") %>%
   select(
-    -worms_class, -class_clean, -scientificname, -species_flag_taxon_name, 
+    -worms_class, -class_clean, -scientificname, -species_flag_taxon_name,
     -aphia_id, -sflag, -trophic_type, -biovolume_mm3,
     -carbon_ug, -carbon_ug_per_liter, -counts, -counts_per_liter,
     -any_of(c("precision", "detection_probability", "miss_probability",
@@ -496,42 +473,11 @@ unclassified <- data_aggregated %>%
   ) %>%
   rename(unclassified_counts = cell_counts,
          unclassified_abundance = cell_counts_per_liter,
-         unclassified_volume = biovolume_mm3_per_liter,
-         ph = `70`,
-         chl = `8063`,
-         cdom = `8165`,
-         pc = `8173`,
-         pe = `8166`,
-         waterflow = `8172`,
-         turb = `8174`,
-         pco2 = `8177`,
-         watertemp = `8179`,
-         salinity = `8181`,
-         oxygen_saturation = `8190`,
-         oxygen_ml_l = `8191`) %>%
-  mutate(across(all_of(intersect(c("ph", "chl", "cdom", "pc", "pe", 
-                                   "waterflow", "turb", "pco2", "oxygen_saturation"), 
-                                 names(.)[!sapply(., is_all_na)])),
-                ~ na_if(.x, -999))) %>% # Replace -999 values with NA
-  mutate(across(all_of(intersect(c("ph", "pco2"), 
-                                 names(.)[!sapply(., is_all_na)])),
-                ~ na_if(.x, 0))) # Replace 0 values with NA
+         unclassified_volume = biovolume_mm3_per_liter)
 
-# Remove unclassified from main data frame and bind with unclassified and ferrybox data
+# Remove unclassified from main data frame and bind with unclassified data
 data_aggregated <- data_aggregated %>%
   filter(!class_clean == "unclassified") %>%
-  rename(ph = `70`,
-         chl = `8063`,
-         cdom = `8165`,
-         pc = `8173`,
-         pe = `8166`,
-         waterflow = `8172`,
-         turb = `8174`,
-         pco2 = `8177`,
-         watertemp = `8179`,
-         salinity = `8181`,
-         oxygen_saturation = `8190`,
-         oxygen_ml_l = `8191`) %>%
   bind_rows(unclassified) %>%
   arrange(desc(verification), sample, class_clean)
 
@@ -591,11 +537,11 @@ ggsave(file.path(received_data, "qc_plot.png"),
        bg = "white")
 
 # Store data
-write_tsv(sample_sum, file.path(received_data, "sample_sums.txt"), 
+write_tsv(sample_sum, file.path(received_data, "sample_sums.txt"),
           progress = FALSE, na = "")
 
 # Store taxonomic info
-write_tsv(class_names, file.path(received_data, "class_names.txt"), 
+write_tsv(class_names, file.path(received_data, "class_names.txt"),
           progress = FALSE, na = "")
 
 # -------------------------------
@@ -608,8 +554,9 @@ shark_col <- ifcb_get_shark_colnames()
 # Create a data frame with empty rows matching the length of data
 shark_col[nrow(shark_col) + seq_len(nrow(data_aggregated)), ] <- NA
 
-station_name <- paste0("RV_FB_", data_aggregated$sample)
-depth <- 4
+# Tångesund: fixed station sampled at different depths (per-sample depth from metadata)
+station_name <- "Tangesund"
+depth <- data_aggregated$depth
 
 # Create shark_df by mapping relevant data from 'data' to Shark database columns
 shark_df <- shark_col %>%
@@ -618,7 +565,7 @@ shark_df <- shark_col %>%
          SAMPLING_PLATFORM = data_aggregated$platform,
          PROJ = ifelse(year < 2025, "IFCB, DTO, JERICO", "IFCB"),
          ORDERER = "SMHI",
-         SHIPC = "77SE",
+         SHIPC = NA,
          CRUISE_NO = data_aggregated$cruise,
          SDATE = data_aggregated$date,
          DATE_TIME = as.character(format(data_aggregated$timestamp, "%Y%m%d%H%M%S")),
@@ -627,7 +574,7 @@ shark_df <- shark_col %>%
          LATIT = round(data_aggregated$latitude, 4),
          LONGI = round(data_aggregated$longitude, 4),
          POSYS = "GPS",
-         PDMET = "MIX",
+         PDMET = "SEP",
          METFP = "NON",
          IFCBNO	= data_aggregated$ifcb_number,
          MPROG = "PROJ",
@@ -635,9 +582,9 @@ shark_df <- shark_col %>%
          MXDEP = depth,
          SLABO = "SMHI",
          ACKR_SMP = "N",
-         SMTYP = "FerryBox",
+         SMTYP = "IFCB",
          SMVOL = round(data_aggregated$ml_analyzed, 3), # VOLUME
-         SMPNO = data_aggregated$sample, # SAMPLE NAME
+         SMPNO = data_aggregated$sample, # SAMPLE NAME (full pid)
          LATNM = data_aggregated$scientificname, # SPECIES
          SFLAG = data_aggregated$sflag, # SP or SPP
          LATNM_SFLAG = data_aggregated$species_flag_taxon_name,
@@ -666,42 +613,31 @@ shark_df <- shark_col %>%
                        "https://github.com/WHOIGit/ifcb-features/releases/tag/v1.0.0",
                        "https://github.com/EuropeanIFCBGroup/iRfcb",
                        sep = ", "), # METHOD
-         TRAINING_SET = "https://doi.org/10.17044/scilifelab.25883455.v6",
+         TRAINING_SET = paste("https://doi.org/10.17044/scilifelab.25883455.v6",
+                              "https://doi.org/10.5281/zenodo.17601020",
+                              "https://doi.org/10.5281/zenodo.15471023",
+                              "https://ifcb-portal.sams.ac.uk/annotatedImages/",
+                              sep = ", "),
          CLASSIFIER_USED = basename(gsub("\\\\", "/", iconv(data_aggregated$classifier, from = "Windows-1252", to = "UTF-8"))),
          MANUAL_QC_DATE = as.Date(Sys.Date()),
          PRE_FILTER_SIZE ="150", # unit um
          UNCLASSIFIED_COUNTS = round(data_aggregated$unclassified_counts, 1),
          UNCLASSIFIED_ABUNDANCE = signif(data_aggregated$unclassified_abundance, 6),
          UNCLASSIFIED_VOLUME = signif(data_aggregated$unclassified_volume, 6),
-         PH_FB = NA, # round(data_aggregated$ph, 3), # Wait until method is validated
-         CHL_FB = round(data_aggregated$chl, 4),
-         CDOM_FB = round(data_aggregated$cdom, 4),
-         PHYC_FB = data_aggregated$pc,
-         PHER_FB = round(data_aggregated$pe, 4),
-         WATERFLOW_FB = round(data_aggregated$waterflow, 4),
-         TURB_FB = round(data_aggregated$turb, 4),
-         PCO2_FB = data_aggregated$pco2,
-         TEMP_FB = round(data_aggregated$watertemp, 4),
-         PSAL_FB = round(data_aggregated$salinity, 4),
-         OSAT_FB = round(data_aggregated$oxygen_saturation, 4),
-         DOXY_FB = round(data_aggregated$oxygen_ml_l, 4)
-  ) 
-
-if (internal_use) {
-  shark_df <- shark_df %>%
-    mutate(Q_PH_FB = data_aggregated$`80070`,
-           Q_CHL_FB = data_aggregated$`88063`,
-           Q_CDOM_FB = data_aggregated$`88165`,
-           Q_PHYC_FB = data_aggregated$`88173`,
-           Q_PHER_FB = data_aggregated$`88173`,
-           Q_WATERFLOW_FB = data_aggregated$`88172`,
-           Q_TURB_FB = data_aggregated$`88174`,
-           Q_PCO2_FB = data_aggregated$`88177`,
-           Q_TEMP_FB = data_aggregated$`88179`,
-           Q_PSAL_FB = data_aggregated$`88181`,
-           Q_OSAT_FB = data_aggregated$`88190`,
-           Q_DOXY_FB = data_aggregated$`88191`)
-}
+         # No ferrybox data for Tångesund 2016 - report *_FB parameters as NA
+         PH_FB = NA,
+         CHL_FB = NA,
+         CDOM_FB = NA,
+         PHYC_FB = NA,
+         PHER_FB = NA,
+         WATERFLOW_FB = NA,
+         TURB_FB = NA,
+         PCO2_FB = NA,
+         TEMP_FB = NA,
+         PSAL_FB = NA,
+         OSAT_FB = NA,
+         DOXY_FB = NA
+  )
 
 # -------------------------------
 # Data delivery
@@ -724,8 +660,8 @@ if (!dir.exists(correspondence)) {
 write_tsv(shark_df, file = file.path(processed_data, "data.txt"), na = "", progress = FALSE) # Save as tab-delimited file
 
 # Save shark_df data to a tab-delimited file in received_data folder with dynamic filename
-filename <- paste0("shark_data_", 
-                   as.character(year), "_", 
+filename <- paste0("shark_data_",
+                   as.character(year), "_Tangesund_",
                    Sys.Date(), ".txt")
 write_tsv(shark_df, file = file.path(received_data, filename), na = "", progress = FALSE) # Save as tab-delimited file
 
@@ -741,7 +677,7 @@ delivery_note_content <- c(
   "övervakningsprogram: PROJ",
   "beställare: SMHI",
   "projekt: IFCB, DTO, JERICO",
-  "kommentarer:",
+  "kommentarer: Tångesund (IFCB110), fixed station sampled at different depths",
   "status: test"
 )
 
@@ -765,7 +701,7 @@ writeLines(delivery_note_content, file.path(processed_data, "delivery_note.txt")
 # message <- c(
 #   paste0('From: "IFCB" <ifcb.u@smhi.se>
 # To:', to_header, '
-# Subject: Dataleverans IFCB
+# Subject: Dataleverans IFCB Tångesund
 # 
 # Hej,
 # 
