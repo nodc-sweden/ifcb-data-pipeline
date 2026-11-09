@@ -161,7 +161,8 @@ if (file.exists(file.path(processed_data, "data.txt"))) {
 
 cat("Calculating distance from land...\n")
 
-valid_idx <- metadata_selected$latitude != -999 & metadata_selected$longitude != -999
+valid_idx <- !is.na(metadata_selected$latitude) & metadata_selected$latitude != -999 &
+  !is.na(metadata_selected$longitude) & metadata_selected$longitude != -999
 
 # Preallocate
 metadata_selected$near_land <- NA
@@ -336,7 +337,7 @@ autoclass_joined <- biovolumes %>%
          # classifier_used = paste0("SMHI-", params$classifier, " v.", max_versions[[i]]),
          metoa = "IMA-SW",
          associated_media = NA,
-         class_prog = "https://github.com/nodc-sweden/ifcb-pytorch-classify/releases/tag/v0.2.0")
+         class_prog = "https://github.com/nodc-sweden/ifcb-pytorch-classify/releases/tag/v0.4.0")
 
 autoclass_aggregated <- autoclass_joined %>%
   # Group by species where known, else by classifier class, so classes lacking a
@@ -389,7 +390,7 @@ manual_joined <- manual_biovolumes %>%
          classifier_used = NA,
          metoa = "IMA",
          associated_media = "https://ecotaxa.obs-vlfr.fr/prj/822, https://ecotaxa.obs-vlfr.fr/prj/14392",
-         class_prog = "https://github.com/EuropeanIFCBGroup/ClassiPyR/releases/tag/v0.2.1")
+         class_prog = "https://github.com/EuropeanIFCBGroup/ClassiPyR/releases/tag/v0.3.0")
 
 # Aggregate based on scientific name
 manual_aggregated <- manual_joined %>%
@@ -667,7 +668,7 @@ shark_df <- shark_col %>%
          METDC = paste("https://github.com/EuropeanIFCBGroup/ClassiPyR",
                        "https://github.com/nodc-sweden/ifcb-pytorch-classify",
                        "https://github.com/kudelalab/PSD",
-                       "https://github.com/WHOIGit/ifcb-features/releases/tag/v1.0.0",
+                       "https://github.com/WHOIGit/ifcb-features/releases/tag/v1.2.0",
                        "https://github.com/EuropeanIFCBGroup/iRfcb",
                        sep = ", "), # METHOD
          TRAINING_SET = paste("https://doi.org/10.17044/scilifelab.25883455.v6",
